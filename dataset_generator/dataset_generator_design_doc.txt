@@ -1,0 +1,240 @@
+# Poker Dataset Generator: Range Generation Design
+
+This document outlines the design and implementation of the `range_generator.py` module, which is responsible for generating poker hand ranges for game state analysis.
+
+## Core Objectives:
+
+1.  **Define Base Ranges:** Establish standard archetypes for player ranges (Tight, Balanced, Loose) for both In-Position (IP) and Out-of-Position (OOP) players.
+2.  **Dynamic Range Adaptation:** For a designated "hero" player with a known hand, adaptively select the most appropriate base range type to ensure coherence between the hero\'s actual holding and the assigned range.
+3.  **Range Perturbation:** Introduce controlled randomness to the base ranges to create a diverse set of slightly varied ranges, making the generated dataset richer.
+4.  **Output Formats:** Provide ranges as both lists of hand strings and comma-separated strings suitable for poker solver inputs.
+
+## Key Components & Logic in `range_generator.py`:
+
+### 1. Constants and Basic Hand Utilities:
+
+*   **`RANKS`**: List of card ranks (`['A', 'K', ..., '2']`).
+*   **`HAND_TYPES`**: `['s', 'o']` (suited, offsuit).
+*   **`ALL_169_HAND_COMBINATIONS`**: A list holding all 169 unique poker hand combinations (e.g., "AA", "AKs", "T9o").
+    *   Initialized by `_initialize_169_hands()`.
+*   **`SORTED_MASTER_HAND_LIST`**: `ALL_169_HAND_COMBINATIONS` sorted by a canonical strength order (AA, AKs, AKo, KK...). This is crucial for strength comparisons and neighbor identification.
+*   **`HAND_STRENGTH_RANK`**: A dictionary mapping each hand string from `SORTED_MASTER_HAND_LIST` to its numerical strength rank (0 = strongest, 168 = weakest).
+*   **`get_rank_index(rank_char)`**: Helper to get the numerical index of a rank character.
+
+### 2. Shorthand Range Expansion:
+
+*   **`expand_range_shorthand(shorthand_str)`**:
+    *   Takes a poker shorthand string (e.g., "JJ+", "A9s+", "77-99", "AQ+") as input.
+    *   Expands it into a list of specific, canonical hand combinations (e.g., "JJ+" -> `["JJ", "QQ", "KK", "AA"]`).
+    *   Handles pairs, suited/offsuit kickers, plus notation, and dash notation for common cases.
+    *   Uses `ALL_169_HAND_COMBINATIONS` for validation and `HAND_TYPES` for suit logic.
+
+### 3. Reference Range Definitions:
+
+*   **`REFERENCE_RANGES_SHORTHAND`**: A nested dictionary storing the defined base ranges using shorthand notation.
+    *   Structure: `{'OOP': {'Tight': "shorthand", ...}, 'IP': {'Tight': "shorthand", ...}}`
+    *   These define the archetypal Tight, Balanced, and Loose ranges for OOP and IP players.
+*   **`PROCESSED_REFERENCE_RANGES`**: A nested dictionary populated by processing `REFERENCE_RANGES_SHORTHAND`.
+    *   Structure mirrors `REFERENCE_RANGES_SHORTHAND` but replaces shorthand strings with sorted lists of actual hand combinations (expanded by `expand_range_shorthand`).
+    *   Populated by `_process_reference_ranges()` at module load.
+*   **`_process_reference_ranges()`**: Iterates through `REFERENCE_RANGES_SHORTHAND`, calls `expand_range_shorthand` for each part of the comma-separated shorthand, and stores the resulting lists in `PROCESSED_REFERENCE_RANGES`.
+
+### 4. Range Strength and Boundary Analysis:
+
+*   **`get_range_strength_bounds(range_list)`**:
+    *   Input: A list of hand strings.
+    *   Output: A tuple `(min_strength_rank, max_strength_rank)` representing the strongest and weakest hands in the list, based on `HAND_STRENGTH_RANK`.
+
+### 5. Adaptive Range Selection for Hero:
+
+*   **Constants for Adaptive Logic:**
+    *   `PLAYER_ROLES = ['OOP', 'IP']`
+    *   `RANGE_TYPE_ORDER = ['Tight', 'Balanced', 'Loose']` (Defines adjustment path)
+    *   `DEFAULT_INITIAL_RANGE_TYPE = 'Balanced'`
+    *   `ACCEPTABLE_WEAKNESS_OFFSET`, `ACCEPTABLE_STRENGTH_OFFSET`: Thresholds for determining if a hero's hand is too far from a range category's bounds.
+*   **`determine_hero_range_type_and_base_range(...)`**:
+    *   Inputs: `hero_hand_str`, `hero_player_role`, `initial_range_type_preference`, offsets.
+    *   Compares the `hero_hand_str`'s strength rank against the bounds of the `PROCESSED_REFERENCE_RANGES` for the `initial_range_type_preference`.
+    *   If the hero's hand is too weak for the current type (based on `weakness_offset`), it attempts to shift to a looser type in `RANGE_TYPE_ORDER`.
+    *   If too strong (based on `strength_offset`), it attempts to shift to a tighter type.
+    *   Returns the `final_hero_range_type` and the corresponding `final_base_hero_range_list`.
+
+### 6. Range Perturbation:
+
+*   **`PERTURBATION_PARAMS`**: A dictionary holding parameters for the perturbation process:
+    *   `prob_keep_core_hand`: Probability a hand from the base range is kept.
+    *   `prob_add_stronger_neighbor`, `prob_add_weaker_neighbor`: Probabilities for adding neighboring hands.
+    *   `neighbor_window_half_size`: Defines how many hands (by strength rank) around a core hand are considered neighbors.
+    *   `max_added_hands_percentage`, `max_removed_hands_percentage`: Caps on how much the range can change relative to its original size.
+*   **`_perform_perturbation(base_range_list, player_role, range_type)`**:
+    *   Takes a `base_range_list` (e.g., selected by adaptive logic for hero, or directly for villain).
+    *   **Keep/Remove Core Hands:** Iterates through `base_range_list`. Each hand is kept or (conditionally, respecting `max_removed_hands_percentage`) removed based on `prob_keep_core_hand`.
+    *   **Identify & Add Neighbors:**
+        *   For each hand originally in the base range, it identifies "neighboring" hands from `SORTED_MASTER_HAND_LIST` within the `neighbor_window_half_size`.
+        *   Neighbors not in the original base range become candidates for addition.
+        *   Candidates are shuffled and probabilistically added (respecting `max_added_hands_percentage`) based on an average of `prob_add_stronger_neighbor` and `prob_add_weaker_neighbor`.
+    *   Returns a sorted list of perturbed hand strings.
+
+### 7. Main Range Generation Function:
+
+*   **`generate_player_range_info(...)`**:
+    *   Primary interface for generating range data for a player.
+    *   Inputs: `player_role`, `is_hero` (boolean), `hero_hand_str_if_any`, `range_type_preference`.
+    *   **Hero Logic:** If `is_hero`, it calls `determine_hero_range_type_and_base_range` to get an adaptively chosen base range.
+    *   **Villain Logic:** If not `is_hero`, it uses `range_type_preference` directly to select a base range from `PROCESSED_REFERENCE_RANGES`.
+    *   Calls `_perform_perturbation` on the selected base range.
+    *   **Hero Hand Force Inclusion:** If `is_hero`, it ensures `hero_hand_str_if_any` is present in the final perturbed list (safety net).
+    *   Converts the final list to a comma-separated string.
+    *   Returns a dictionary containing: `player_role`, `is_hero`, `hero_hand_actual`, `range_type_selected`, counts, sample hands, and `final_range_str`.
+
+### 8. Gamestate Augmentation Utilities (within `range_generator.py`):
+
+These functions bridge the core range generation logic with the processing of entire gamestates.
+
+*   **`holding_to_hand_str(card1_repr, card2_repr)`**:
+    *   Converts various representations of a hero's two hole cards (e.g., string "As", tuple ('K','c'), card objects) into the canonical 169-hand string format (e.g., "AKs", "TT", "72o").
+    *   This standardized string is crucial for looking up hand strength and ensuring compatibility with range definitions.
+
+*   **`augment_gamestate_with_ranges(gamestate_data, hero_is_oop_field='hero_is_oop', hero_holding_field='hero_holding')`**:
+    *   Takes a single gamestate dictionary as input. This dictionary is expected to contain information about the hero's holding (parsable by `holding_to_hand_str`) and whether the hero is out of position.
+    *   Determines the hero's role (OOP/IP) and parses their actual hand into the 169-string format using `holding_to_hand_str`.
+    *   Randomly selects initial range type preferences (Tight, Balanced, Loose) for both the OOP and IP players.
+    *   Calls `generate_player_range_info` for the OOP player, passing whether they are the hero, their actual hand string (if hero), and the randomly chosen preference.
+    *   Calls `generate_player_range_info` for the IP player similarly.
+    *   Adds the following keys to a copy of the input `gamestate_data` dictionary and returns it:
+        *   `oop_range_str`: Comma-separated string of the OOP player's final perturbed range.
+        *   `oop_range_type_selected`: The range type (e.g., 'Tight', 'Balanced_Adapted') chosen for the OOP player.
+        *   `ip_range_str`: Comma-separated string of the IP player's final perturbed range.
+        *   `ip_range_type_selected`: The range type chosen for the IP player.
+        *   Initially, it also added `hero_hand_parsed_str`, but this was removed as it was deemed redundant with the original `holding` column in the CSV.
+
+*   **`process_gamestate_dataset(list_of_gamestate_dicts, ...)`**:
+    *   A wrapper function that takes a list of gamestate dictionaries.
+    *   Iterates through the list, calling `augment_gamestate_with_ranges` for each dictionary.
+    *   Collects the augmented dictionaries and returns them as a new list. Includes basic error handling to skip problematic gamestates.
+
+
+## CSV Processing and Dataset Creation (`create_range_augmented_dataset.py`):
+
+This script serves as the main entry point for generating the augmented dataset by reading an input CSV, processing each row to generate ranges, and writing to an output CSV.
+
+### 1. Core Functions:
+
+*   **`parse_holding_from_str(holding_str)`**:
+    *   A utility function to parse a 4-character holding string (e.g., "AhKd" from the CSV) into a list of two card strings (e.g., `["Ah", "Kd"]`). This format is suitable for input to `holding_to_hand_str` within `range_generator.py`.
+    *   Raises a ValueError for invalid formats.
+
+*   **`create_augmented_dataset(input_csv_path, output_csv_path, num_test_rows=0)` (formerly `process_input_csv`)**:
+    *   Orchestrates the entire CSV processing workflow.
+    *   **File Handling:** Opens the `input_csv_path` for reading and prepares `output_csv_path` for writing.
+    *   **CSV Reading:** Uses `csv.DictReader` to read rows from the input file.
+    *   **Fieldname Management:** Dynamically determines the fieldnames for the output CSV, starting with the original fieldnames and appending new ones for the generated range data (`oop_range_str`, `oop_range_type_selected`, `ip_range_str`, `ip_range_type_selected`).
+    *   **Row Processing Loop:** For each row in the input CSV:
+        *   Creates a mutable `gamestate_data` dictionary from the current row.
+        *   **Hero Position:** Parses the `hero_position` column (e.g., "OOP" or "IP") to determine if the hero is out of position (`hero_is_oop` boolean). Skips row if invalid.
+        *   **Hero Holding:** Parses the `holding` column string (e.g., "AsKc") using `parse_holding_from_str` to get a list like `["As", "Kc"]`. Skips row if invalid.
+        *   **Augmentation Call:** Calls `augment_gamestate_with_ranges` (from `range_generator.py`) with the `gamestate_data` dictionary, the hero's position, and their parsed holding. The field names used by `augment_gamestate_with_ranges` for holding and position are explicitly passed.
+        *   The `augment_gamestate_with_ranges` function returns the `gamestate_data` dictionary now augmented with the new range string columns and selected range type columns.
+        *   Handles errors during parsing or augmentation for a row, printing a warning and skipping the problematic row.
+    *   **CSV Writing:** After processing all rows (or `num_test_rows`), uses `csv.DictWriter` to write the list of augmented dictionaries to the `output_csv_path`.
+    *   Includes progress messages and error reporting.
+
+### 2. Main Execution Block (`if __name__ == "__main__":`)
+
+*   Provides a test/sample execution capability.
+*   Defines paths for a dummy input CSV and a test output CSV.
+*   Includes logic to create a small, sample `dummy_input_for_test.csv` file with a few rows of data mimicking the structure of the user's actual dataset.
+*   Calls `create_augmented_dataset` to process this dummy file (or a specified number of rows from the actual dataset for a quick test) and save the output.
+*   Contains commented-out lines for running the script on the full dataset.
+
+
+## Overall Dataset Generation Pipeline:
+
+1.  **Input:** A CSV file (`datasets/postflop_500k_train_set_game_scenario_information.csv`) where each row represents a game scenario, including at least `holding` (e.g., "AhKd") and `hero_position` ("OOP" or "IP") columns.
+2.  **Execution:** The user runs `python -m dataset_generator.create_augmented_dataset`.
+3.  **CSV Parsing (`create_range_augmented_dataset.py`):**
+    *   The script reads the input CSV row by row.
+    *   For each row, it extracts `holding` and `hero_position`.
+    *   `holding` string (e.g., "AhKd") is parsed into a list of two card strings (e.g., `["Ah", "Kd"]`) by `parse_holding_from_str`.
+4.  **Gamestate Augmentation (`range_generator.py` via `create_range_augmented_dataset.py`):**
+    *   `create_range_augmented_dataset.py` calls `augment_gamestate_with_ranges` from `range_generator.py` for each row's data.
+    *   Inside `augment_gamestate_with_ranges`:
+        *   The hero's card list is converted to a 169-hand string (e.g., "AKo") by `holding_to_hand_str`.
+        *   Initial range types (Tight, Balanced, Loose) are randomly selected for OOP and IP players.
+        *   `generate_player_range_info` is called for both OOP and IP roles:
+            *   **Hero's Range:** The hero's actual hand string and initial range type preference guide the adaptive selection (`determine_hero_range_type_and_base_range`) to pick a suitable base range (e.g., "Balanced OOP"). This base range is then perturbed (`_perform_perturbation`), and the hero's actual hand is force-included.
+            *   **Villain's Range:** The villain's initial range type preference directly selects their base range, which is then perturbed.
+        *   The function returns the original gamestate data augmented with `oop_range_str`, `ip_range_str`, `oop_range_type_selected`, and `ip_range_type_selected`.
+5.  **Output CSV Generation (`create_range_augmented_dataset.py`):**
+    *   The script collects all augmented rows.
+    *   A new CSV file (e.g., `dataset_generator/augmented_gamestates.csv`) is written, containing all original columns plus the newly generated range information.
+
+## Workflow for Generating a Gamestate's Ranges (Summary from `range_generator.py` perspective):
+
+1.  **Parse Hero Hand:** Given hero's raw holding (e.g. from CSV as `["Ah", "Kd"]`), `holding_to_hand_str` converts it to a canonical string (e.g., "AKo").
+2.  **Determine Roles:** Identify which player is OOP and IP, and which one is the hero.
+3.  **Initial Preferences:** Randomly assign an initial range type (Tight, Balanced, Loose) for OOP and IP.
+4.  **Generate OOP Range:**
+    *   Call `generate_player_range_info` for OOP.
+    *   If OOP is hero: `determine_hero_range_type_and_base_range` adapts the initial preference based on hero's "AKo".
+    *   The chosen base range is perturbed by `_perform_perturbation`.
+    *   "AKo" is ensured to be in the final list.
+    *   Result: `oop_range_str` and `oop_range_type_selected`.
+5.  **Generate IP Range:**
+    *   Call `generate_player_range_info` for IP.
+    *   If IP is hero (not in this example): similar adaptive logic.
+    *   If IP is villain: initial preference selects base range directly.
+    *   The chosen base range is perturbed.
+    *   Result: `ip_range_str` and `ip_range_type_selected`.
+6.  **Combine:** The original gamestate data is updated with these four new pieces of information.
+
+## Solver Output Generation for Internal Search Traces
+
+The `internal_search_poker_internal_search_methodology.txt` paper details the structure of linearized search traces required for training the poker LLM. A crucial component of this is obtaining detailed game-theoretic evaluations from a sophisticated poker solver. The `dataset_generator/query_solver.py` module will serve as the primary Python interface for this task.
+
+### Role and Adaptation of `query_solver.py`
+
+While `range_generator.py` focuses on defining player hand ranges for various game scenarios, `query_solver.py` will be responsible for taking these scenarios (defined by ranges, board cards, pot, stack, and history) and retrieving the rich strategic information output by the underlying Rust poker solver.
+
+**1. Required Data Points:**
+As outlined in Section 5.1 ("Data Generation") of the methodology paper, `query_solver.py` (through the Rust solver) needs to provide data for each decision point Hero faces. This includes:
+*   **Hero Action EVs:** For a set of canonical actions available to Hero (e.g., check, bet small, bet medium, fold), the solver-calculated Expected Value (EV) for Hero taking each specific action.
+*   **Opponent Response Analysis:** Following a specific Hero action:
+    *   The distribution of likely opponent responses (e.g., fold, call, raise specific sizes) according to their GTO strategy, including the probability of each response.
+    *   The EV for Hero resulting from each of these opponent responses.
+*   **Abstracted Card Outcome EVs:** For chance nodes (e.g., dealing the turn or river card), the EV for Hero after various abstracted card outcomes (e.g., "Flush-Completing Card," "Blank Card"). These abstracted outcome EVs are solver-calculated weighted averages over all actual cards falling into that strategic category.
+
+**2. Necessary Modifications to `query_solver.py` and Rust FFI:**
+The current `run_solver_from_rust` function in `query_solver.py` calls the Rust FFI function `run_solver_for_gamestate_ffi`, which has a `void` return type (`restype = None`). To retrieve the detailed data points listed above, significant modifications will be required:
+*   **Rust FFI Enhancement:** The Rust function `run_solver_for_gamestate_ffi` (or a new dedicated FFI function) must be modified. Instead of returning `void`, it needs to compute and then return the detailed strategic information. This could be achieved by:
+    *   Returning a C-style string (`ctypes.c_char_p`) containing serialized data (e.g., a JSON string) that encapsulates all the required EV and probability information.
+    *   Populating a complex C-compatible struct passed by reference from Python, with fields for all the necessary data.
+*   **Python-Side Handling in `query_solver.py`:**
+    *   The `restype` for the FFI function in `query_solver.py` must be updated to match the new return type (e.g., `solver_lib.run_solver_for_gamestate_ffi.restype = ctypes.c_char_p`).
+    *   If data is returned as a string (e.g., JSON), `query_solver.py` will need to decode/parse this string into a structured Python object (e.g., a dictionary or a custom data class).
+    *   If a struct is used, Python will need to define the corresponding `ctypes.Structure` and read data from it after the FFI call.
+
+**3. Workflow for Data Extraction:**
+The enhanced workflow involving `query_solver.py` will be:
+1.  A specific game state (ranges, board, pot, stacks, history, current player to act) is defined. This can come from the output of `range_generator.py` and the initial gamestate CSV.
+2.  `query_solver.py` calls the modified Rust FFI function, passing this game state.
+3.  The Rust solver executes, performs its game-theoretic calculations, and gathers all the required EV data, opponent strategy profiles, and abstracted card outcome evaluations.
+4.  The Rust FFI function serializes this data and returns it to the Python environment.
+5.  `query_solver.py` receives this raw data and parses it into a structured Python format (e.g., a dictionary).
+6.  This structured data represents the "raw solver output" for that specific game state and decision point. It will then be used as input for a subsequent process that formats it into the "linearized search traces" as described in Section 2 of `internal_search_poker_internal_search_methodology.txt`.
+
+**4. Integration with CSV Processing:**
+The `main()` function within `query_solver.py`, which currently reads gamestates from `gamestates.csv` and runs the solver, will be adapted. Instead of merely triggering the solver, it will:
+*   Call the enhanced solver FFI function.
+*   Retrieve the rich structured data returned by the solver.
+*   Process and store this data, likely by writing it to a new output file (e.g., a JSONL file where each line is a JSON object of solver outputs for a gamestate, or an augmented CSV). This file will then serve as the input for the LLM training data preparation pipeline, which constructs the full linearized search traces.
+
+This evolution of `query_solver.py` is critical for bridging the gap between the raw computational power of the poker solver and the specific data requirements for training the internal search LLM.
+
+## Future Considerations/Refinements:
+
+*   Make `PERTURBATION_PARAMS` configurable per `range_type` or `player_role` for more fine-grained control.
+*   Implement more sophisticated neighbor identification or addition probabilities in `_perform_perturbation`.
+*   Allow for multiple perturbation runs on the same base range to generate several distinct variations for a single scenario.
+*   Integrate with a CSV or data source to process multiple gamestates.
+--- 

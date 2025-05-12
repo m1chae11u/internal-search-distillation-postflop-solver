@@ -1,0 +1,213 @@
+**Implementation Plan: Internal Search Distillation for Poker LLM**
+
+This document outlines the step-by-step process for implementing the internal search distillation methodology for a poker-playing LLM, as described in `poker_internal_search_methodology.txt`.
+
+**Core Abstractions (Assumed Available):**
+1.  `solver_get_ev_and_strategy(current_game_state)`: A function that takes the game state and returns solver outputs, including EVs for Hero's actions, Hero's GTO action frequencies, and Opponent's GTO action frequencies in response.
+2.  `GameStateObject`: An object or structure representing the poker game state, with methods to update it after actions, card dealing, etc., and to serialize/deserialize it for the solver and for trace logging.
+
+---
+**Phase 1: Ground Truth Data Generation Pipeline**
+---
+The goal of this phase is to generate a large dataset of linearized search traces based on solver outputs. These traces will be the training data for the LLM.
+
+**Step 1: Game Situation Processing from CSV Dataset**
+   *   **What:** Process an existing dataset of poker game situations from a CSV file to serve as starting points for trace generation.
+   *   **Source CSV File:** `/home/xuandong/mnt/poker/Poker-Internal-Search/pokerbench_data/csvs/postflop_500k_train_set_game_scenario_information.csv`
+   *   **Why:** To leverage existing structured game data and convert it into the necessary format for solver interaction and trace generation. The LLM needs to learn from a wide variety of scenarios; the diversity of this dataset will be key.
+   *   **How:**
+        1.  **CSV Parsing:**
+            *   Read the specified CSV file row by row. Each row is assumed to represent a unique game scenario.
+            *   Identify the relevant columns in the CSV that contain information such as: public board cards, pot size, effective stack sizes, player positions (Hero vs. Opponent), detailed game history (preflop and postflop actions leading to the current state), and potentially Hero's specific hole cards for that scenario (if available, otherwise hole cards might need to be sampled consistent with the history).
+        2.  **Data Conversion to `GameStateObject`:**
+            *   For each row parsed from the CSV:
+                *   Transform the raw data from the columns into the structured `GameStateObject` format that your system (and specifically the `solver_get_ev_and_strategy` function) expects. This involves:
+                    *   Formatting board cards.
+                    *   Setting pot and stack sizes.
+                    *   Reconstructing the game history in the required format for the `GameStateObject`.
+                    *   Assigning Hero's hole cards. If the CSV provides specific hole cards for Hero in that scenario, use them. If not, and if your solver operates on specific hands rather than ranges for Hero in this step, you might need a mechanism to sample a plausible Hero hand given the game history up to that point (this can be complex and might involve pre-defined ranges or a separate hand assignment module).
+            *   Each successfully converted row from the CSV results in a `GameStateObject` (and potentially a `current_hero_hand`) that will be the starting point for an individual trace generation (passed to Step 3).
+        3.  **Output of this Step:** A stream or list of `GameStateObject` instances, each ready to be fed into the trace construction logic.
+
+**Step 2: Solver Interaction Module**
+   *   **What:** Create a robust wrapper or interface for calling the `solver_get_ev_and_strategy(game_state)` function.
+   *   **Why:** To handle solver calls consistently and parse its outputs into a usable format for trace generation.
+   *   **How:**
+        *   Define the precise input format your `GameStateObject` needs to be converted into for the solver (if it's different from the internal `GameStateObject` representation).
+        *   Define how to parse the solver's output:
+            *   EVs for each of Hero's canonical actions (e.g., check, bet 33% pot, bet 66% pot, bet 100% pot, fold).
+            *   Frequencies for Hero's actions.
+            *   Frequencies for Opponent's potential counter-actions (fold, call, various raise sizings).
+        *   Handle potential solver errors or timeouts gracefully.
+
+**Step 3: Trace Construction Logic (Core Recursive Function)**
+   *   **What:** Implement a core function, say `generate_trace(current_game_state, current_hero_hand, current_depth, max_depth)`, that recursively builds a single search trace starting from a `GameStateObject` (obtained from Step 1).
+   *   **Why:** This is the heart of the data generation, translating solver logic into the linearized text format.
+   *   **How (Illustrative Flow for `generate_trace`):**
+
+        **3.1. Base Cases for Recursion:**
+            *   If `current_depth >= max_depth`: Stop expanding this line of the trace. (Needed to prevent infinite traces).
+            *   If the game ends in the current state (e.g., opponent folded to a previous bet, or it's a showdown): Finalize this branch of the trace.
+
+        **3.2. Construct Hero Decision Node:**
+            *   Use the `current_game_state` and `current_hero_hand` to format the initial context part of the trace (e.g., `<GameContext ...>`, `<HeroHand ...>`, `<Board ...>`).
+            *   Call `solver_get_ev_and_strategy(current_game_state)` to get Hero's options and their immediate EVs.
+            *   Append `<Hero[Street]Decision>` tag.
+            *   For each canonical Hero action (e.g., check, bet_X, bet_Y):
+                *   Append `<ProposeAction action="{action_name}" immediate_ev="{solver_ev_for_action}bb" />`.
+            *   Identify the top N Hero actions (e.g., N=1 or 2, based on methodology Section 3.2) with the highest `immediate_ev` to expand further.
+
+        **3.3. For each chosen Hero Action to Expand (Iterate N times):**
+            *   Let the chosen action be `hero_action_to_expand`.
+            *   Append `<ExpandHeroAction action="{hero_action_to_expand}">`.
+            *   Create `next_game_state_after_hero_action` by applying `hero_action_to_expand` to `current_game_state`.
+            *   Append the new state to the trace (e.g., `<StateAfterHeroBet_... pot=... history_append=...>`).
+
+            *   **Construct Opponent Response Node:**
+                *   Call `solver_get_ev_and_strategy(next_game_state_after_hero_action)` to get the opponent's likely responses and their frequencies.
+                *   Append `<Opponent[Street]ResponseTo[Action]>`.
+                *   Initialize a list to store EVs from opponent responses for calculating `AggregatedEVFromOpponentResponses`.
+                *   For each opponent action (`opp_action`) in the solver's strategy that has a frequency > threshold (e.g., 1% or 5%, as per simplified methodology Section 3.3):
+                    *   `opp_action_probability` = frequency from solver.
+                    *   `ev_for_hero_if_opp_action` = Solver's EV for Hero *if* this specific `opp_action` occurs (this might require a separate solver query or careful parsing if the initial solver call for opponent strategy provides this directly).
+                    *   Append `<PredictOpponentAction action="{opp_action}" probability="{opp_action_probability}" ev_if_{opp_action_type}="{ev_for_hero_if_opp_action}bb" leads_to_state="S_OppTakesAction" />`.
+                    *   Add `(opp_action_probability * ev_for_hero_if_opp_action)` to the list for aggregation.
+                    *   Create `game_state_after_opp_action` by applying `opp_action` to `next_game_state_after_hero_action`.
+                    *   **If betting round continues (e.g., opponent calls/raises and Hero has to act again):**
+                        *   Recursively call `generate_trace(game_state_after_opp_action, current_hero_hand, current_depth + 1, max_depth)` and append its output.
+                    *   **If betting round ends (opponent folds or calls to close action):**
+                        *   If opponent folds, this sub-branch ends.
+                        *   If opponent calls and street ends (e.g., flop call leads to turn): Proceed to Chance Node Construction (Step 3.4).
+                *   Calculate `weighted_avg_ev_from_opp_responses`.
+                *   Append `<AggregatedEVFromOpponentResponses ev_for_hero_after_flop_responses="{weighted_avg_ev_from_opp_responses}bb" />`.
+            *   Append closing tag for `<Opponent[Street]ResponseTo[Action]>`.
+            *   Append closing tag for `<ExpandHeroAction>`.
+
+        **3.4. Construct Chance Node (if applicable, e.g., after flop betting round concludes):**
+            *   Input: `game_state_before_next_street_card`.
+            *   Append `<ChanceNodeFromState... type="Deal[NextStreet]Card">`.
+            *   Initialize a list to store EVs from card outcomes for `AggregatedEVFrom[Street]CardOutcomes`.
+            *   **Define Abstract Card Categories:** (e.g., "BlankCard", "FlushDrawCompletes", "HeroHitsSet"). This is a critical design step.
+            *   For each `AbstractCardOutcomeCategory`:
+                *   `probability_abstract_category` = Sum of probabilities of all actual cards that fall into this category.
+                *   `ev_for_hero_for_abstract_category`: This requires careful calculation:
+                    *   **Ideal Method:** For each actual card in the deck that fits this category:
+                        1.  Simulate dealing that *actual* card to get `game_state_with_actual_card`.
+                        2.  Call `solver_get_ev_and_strategy(game_state_with_actual_card)` to get Hero's EV at the start of the next street (or after some canonical play on that street).
+                        3.  The `ev_for_hero_for_abstract_category` is the probability-weighted average of these EVs over all actual cards in the category.
+                    *   **Simplified Initial Method:** For each abstract category, select 1-2 *representative actual cards*. Deal them, get their solver EVs, and use one of these (or their average) as `ev_for_hero_for_abstract_category`. Clearly document this simplification if used.
+                *   Append `<AbstractCardOutcome outcome="{CategoryName}" probability_abstract="{probability_abstract_category}" ev_for_hero_if_outcome="{ev_for_hero_for_abstract_category}bb" leads_to_state="S_NextStreetCategory" />`.
+                *   Add `(probability_abstract_category * ev_for_hero_for_abstract_category)` to list for aggregation.
+                *   Create `game_state_after_abstract_card_category` (this might be an average state or a representative one).
+                *   Recursively call `generate_trace(game_state_after_abstract_card_category, current_hero_hand, current_depth + 1, max_depth)` and append its output (this will be for the next street, e.g., Hero's Turn Decision).
+            *   Calculate `weighted_avg_ev_from_card_outcomes`.
+            *   Append `<AggregatedEVFrom[Street]CardOutcomes ev_for_hero_after_turn="{weighted_avg_ev_from_card_outcomes}bb" />`.
+            *   Append closing tag for `<ChanceNodeFromState...>`.
+
+        **3.5. Final Decision Tag:**
+            *   After all chosen Hero actions have been expanded (or if no expansion happens), determine the overall best initial Hero action based on the (simplified) backed-up EVs gathered in the trace.
+            *   Append `<FinalDecisionForHero[Street]Action action="{best_initial_hero_action}" overall_backed_up_ev="{its_backed_up_ev}bb" />`.
+            *   Append closing tags for `<Hero[Street]Decision>` and `<GameContext>`.
+
+**Step 4: Trace Storage and Management**
+   *   **What:** Store the generated XML-like traces.
+   *   **Why:** To create the training dataset.
+   *   **How:**
+        *   Save traces as individual text files or append to a large dataset file (e.g., one trace per line in a JSONL or text file).
+        *   Consider unique IDs for traces.
+        *   Implement error checking to ensure traces are well-formed.
+
+---
+**Phase 2: LLM Training**
+---
+This phase involves fine-tuning a pretrained LLM on the generated dataset of search traces.
+
+**Step 5: Model Selection and Setup**
+   *   **What:** Choose a base LLM and set up the training environment.
+   *   **Why:** Foundation for the poker-playing agent.
+   *   **How:**
+        *   Select a suitable pretrained Transformer model (e.g., Llama 2, GPT-Neo, etc.) based on size, performance, and fine-tuning ease.
+        *   Set up Python environment with necessary libraries (e.g., Hugging Face Transformers, PyTorch/TensorFlow).
+
+**Step 6: Tokenization Strategy**
+   *   **What:** Define how the textual search traces are converted into tokens for the LLM.
+   *   **Why:** LLMs operate on tokens, not raw text.
+   *   **How:**
+        *   Use the tokenizer from the chosen pretrained model.
+        *   **Crucial:** Add all special XML-like tags (e.g., `<HeroFlopDecision>`, `<ProposeAction>`) and keywords (`action=`, `immediate_ev=`, abstract outcome names) as *new special tokens* to the tokenizer's vocabulary. This ensures they are treated as single, meaningful units by the LLM.
+        *   Decide how to tokenize numbers (EVs, probabilities, bet sizes). They might be tokenized as sequences of digit tokens or potentially binned into categories if that simplifies learning.
+        *   Verify tokenization on example traces to ensure it's sensible.
+
+**Step 7: Dataset Preparation and Loading**
+   *   **What:** Prepare the dataset of traces for efficient loading during training.
+   *   **Why:** Standard LLM training procedure.
+   *   **How:**
+        *   Tokenize all generated traces.
+        *   Create input-output pairs for autoregressive training (e.g., for a trace `T1, T2, ..., Tn`, inputs are `(T1)`, `(T1, T2)`, ..., `(T1, ..., Tn-1)` and targets are `T2`, `T3`, ..., `Tn`).
+        *   Use a `Dataset` class (e.g., from Hugging Face `datasets` library) for easy batching and shuffling.
+
+**Step 8: Fine-Tuning the LLM**
+   *   **What:** Train the LLM to predict the next token in the search traces.
+   *   **Why:** To teach the LLM the structure and content of the poker reasoning process.
+   *   **How:**
+        *   Use a standard causal language modeling objective (cross-entropy loss).
+        *   Set training hyperparameters: learning rate, batch size, number of epochs, weight decay, optimizer (e.g., AdamW).
+        *   Utilize a training loop (e.g., Hugging Face `Trainer` API or a custom PyTorch loop).
+        *   Implement gradient accumulation if using large models with limited GPU memory.
+        *   Save model checkpoints regularly.
+
+**Step 9: Evaluation During and After Training**
+   *   **What:** Monitor training progress and evaluate the final model.
+   *   **Why:** To ensure the model is learning effectively and to compare different training runs.
+   *   **How:**
+        *   **Metrics:**
+            *   **Perplexity** on a held-out validation set of traces.
+            *   **Accuracy of EV prediction:** If EVs are tokenized, measure exact token match. If treated as regression, measure MSE (this requires modifying the LM head for specific tokens, more complex). For simplicity, start with token match for binned/stringified EVs.
+            *   **Accuracy of action prediction:** At `<ProposeAction>` or `<FinalDecisionForHero...>` tags, how often does the LLM predict the same action as in the ground truth trace?
+            *   **Syntactic correctness:** Percentage of generated traces (on validation prompts) that are well-formed XML-like structures.
+
+---
+**Phase 3: LLM Inference Engine**
+---
+This phase involves using the fine-tuned LLM to make decisions in a live poker game.
+
+**Step 10: Input Formatting for Inference**
+    *   **What:** Convert a live game situation into the initial prompt format the LLM expects.
+    *   **Why:** The LLM needs input in the same format it was trained on.
+    *   **How:**
+        *   Take the current `GameStateObject` (Hero's hand, public board, pot, stacks, history).
+        *   Format it as the starting sequence of the trace, e.g., `<GameContext ...><HeroHand ...><Board ...><Hero[Street]Decision>`. This forms the initial prompt.
+
+**Step 11: Autoregressive Trace Generation**
+    *   **What:** Use the LLM to generate the remainder of the search trace.
+    *   **Why:** This is the LLM's "thinking" process.
+    *   **How:**
+        *   Feed the initial prompt to the fine-tuned LLM.
+        *   Use its `generate()` method (or equivalent) to autoregressively produce tokens.
+        *   **Sampling Strategy:** Decide on decoding strategy (e.g., greedy, nucleus sampling, beam search). Nucleus sampling (top-p) often works well for creative but coherent generation.
+
+**Step 12: Constrained Decoding and Validation (Advanced/Optional)**
+    *   **What:** Implement mechanisms to guide or validate the LLM's output during generation.
+    *   **Why:** To improve the coherence and correctness of the generated traces, especially if the LLM sometimes produces malformed output.
+    *   **How (can be complex):**
+        *   **Grammar-based sampling:** If your trace has a strict grammar (like XML), use tools that constrain LLM output to that grammar.
+        *   **Stop sequences:** Tell the LLM to stop generating when it produces a `<FinalDecisionForHero.../>` tag or reaches a max token limit.
+        *   **Heuristic checks:** After generating a segment (e.g., an `<OpponentFlopResponseToBet_3bb>` block), quickly parse it. If it's syntactically incorrect, you could try to prompt the LLM again or backtrack.
+
+**Step 13: Action Extraction and Execution**
+    *   **What:** Parse the LLM's generated trace to find its chosen action.
+    *   **Why:** To actually make a move in the game.
+    *   **How:**
+        *   Look for the `<FinalDecisionForHero[Street]Action action="{CHOSEN_ACTION}" ... />` tag in the generated trace.
+        *   Extract the `{CHOSEN_ACTION}`. This is the action the LLM will play.
+        *   Convert this action into the format required by the poker environment/game client.
+
+---
+**Iterative Refinement:**
+This entire process is iterative. After an initial implementation:
+*   Analyze the quality of generated data.
+*   Evaluate the LLM's performance not just on metrics but potentially by playing against baselines.
+*   Identify bottlenecks (e.g., slow data generation, poor LLM learning for certain parts of the trace) and refine the methodology, trace format, or training process.
+---
+
+This detailed plan should provide a solid roadmap for your teammate. Good luck! 

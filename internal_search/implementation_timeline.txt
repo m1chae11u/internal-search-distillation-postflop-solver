@@ -1,0 +1,71 @@
+**Proposed Implementation Timeline: Internal Search Distillation for Poker LLM**
+
+*(Assuming start date Thursday, May 9th. Work days are Fri, Sat, Sun, Mon, Tue, Wed, Thu)*
+
+**Phase 0: Prerequisites**
+*   **Ongoing (Michael):** Train Poker Solver (Target completion: May 12)
+*   **May 9 (Thu) - May 10 (Fri Evening):**
+    *   **Mark:** **Solver API Development.** Connect solver to Postgres (if essential for API) and create the callable API (`solver_get_ev_and_strategy`). This is a critical first step.
+    *   **Team (especially lead for trace generation):**
+        *   **Detailed Trace Format Definition & Tokenization Strategy.**
+            *   Finalize ALL XML-like tags, attributes, and the exact structure of your traces (refer to Section 2 of `poker_internal_search_methodology.txt`).
+            *   List all keywords and tags that will need to be added as special tokens to the LLM tokenizer.
+        *   **Begin Architecting Core Trace Construction Logic.**
+            *   Design the main `generate_trace` function outlined in Step 3 of `implementation_steps.txt`. Plan how it will handle Hero decisions, opponent responses, and *especially the card abstraction for chance nodes*.
+
+**Phase 1: Ground Truth Data Generation Pipeline (Intensive)**
+*   **May 11 (Sat):**
+    *   **Trace Generation Lead/Team:** **Implement Core Trace Construction Logic - Part 1.**
+        *   Integrate the (now hopefully ready) Solver API from Mark.
+        *   Focus on getting a single, well-formed trace generated correctly, including state updates, EV annotations, and basic Hero/Opponent nodes. Debug thoroughly.
+        *   The card abstraction for Chance Nodes (Step 3.4 in `implementation_steps.txt`) will require careful implementation. Consider the "Simplified Initial Method" if time is very short.
+    *   **SFT Pipeline Lead:** **SFT Pipeline Setup - Part 1.**
+        *   Select base LLM.
+        *   Set up training environment.
+        *   Initialize tokenizer and plan for adding special tokens (based on Fri's decisions).
+    *   **Eval System Lead:** **Eval System & Inference - Part 1.**
+        *   Define test set format (game states + optimal actions).
+        *   Start building script to load test cases.
+        *   Begin basic **LLM Inference Engine (Step 10 & 11 from `implementation_steps.txt`)**: Code to take a game state, format a prompt, and get *any* LLM (e.g., an off-the-shelf one) to generate text.
+
+*   **May 12 (Sun):**
+    *   **Poker Solver Training Finished (Projected - Michael)**
+    *   **Trace Generation Lead/Team:** **Finalize & Debug Core Trace Construction Logic.**
+        *   Ensure robust handling of all node types and the recursive structure.
+    *   **Start Mass Generation of Solver Data (Traces).** (Step 4: Trace Storage and Management from `implementation_steps.txt`)
+        *   This will run in the background once initiated. Monitor for errors.
+    *   **SFT Pipeline Lead:** **SFT Pipeline Setup - Part 2.**
+        *   Implement dataset preparation (tokenizing traces, creating input-output pairs using Hugging Face `datasets` or similar). Test with a small sample of *actual* generated traces.
+        *   Finalize training script (Step 8).
+    *   **Eval System Lead:** **Build Eval System & Inference - Part 2.**
+        *   Refine the LLM Inference Engine (how to parse the LLM's generated trace to extract the final action - Step 13).
+        *   Complete the script to compare LLM actions to optimal actions in the test set.
+
+**Phase 2: LLM Training & Evaluation**
+*   **May 13 (Mon):**
+    *   **Mass Data Generation:** Should be well underway or complete.
+    *   **SFT Pipeline Lead:** **Test SFT Pipeline End-to-End.**
+        *   Use a subset of the generated traces to ensure the entire fine-tuning process runs.
+    *   **Begin LLM Fine-Tuning (SFT).** This may take several hours or run overnight.
+    *   **Eval System Lead:** **Evaluate Off-the-Shelf LLM.**
+        *   Use the developed inference engine and eval system to get baseline performance.
+
+*   **May 14 (Tue):**
+    *   **LLM Fine-Tuning (SFT):** First version of your SFT-trained LLM should be ready.
+    *   **Eval System Lead:** **Evaluate SFT-Trained LLM.** Compare against baseline and optimal actions.
+    *   **Team (Anyone):** **Generate Visualizations** based on evaluation results.
+    *   **Team:** **Begin Paper Writing** (Methods section, initial results) & **Video Demo Planning/Scripting.**
+
+**Phase 3: Final Deliverables**
+*   **May 15 (Wed) - May 16 (Thu):**
+    *   **Intensive Paper Writing.**
+    *   **Video Demo Creation (Michael Lu).**
+    *   Finalize visualizations and figures.
+    *   Buffer for any re-runs, minor debugging, or unexpected issues.
+
+**Key Considerations for this Aggressive Timeline:**
+
+*   **Trace Construction Logic is Critical:** The complexity of `generate_trace`, especially the card abstraction and EV calculation for abstract outcomes, is the biggest technical hurdle for data generation. Prioritize this and simplify if necessary (e.g., fewer abstract card categories, simpler EV averaging for them initially).
+*   **Iterative Approach:** You might not get perfect traces on the first try. Be prepared to debug and regenerate if major issues are found in the data.
+*   **Parallel Work:** Maximize parallel work (e.g., SFT pipeline setup can occur while trace logic is being built).
+*   **Clear Communication:** With tasks split, ensure everyone is clear on interfaces (like the Solver API output and the exact trace format). 

@@ -1,0 +1,227 @@
+**Proposed Methodology: Internal Search Distillation for Poker Language Models**
+
+**1. Introduction to Internal Search for Imperfect Information Games**
+
+The remarkable success of Large Language Models (LLMs) in complex reasoning tasks has spurred interest in their application to strategic decision-making, including game playing. Recent work has demonstrated that LLMs can perform "internal search" in perfect information games like chess by generating a linearized representation of a search tree and evaluating positions within their own context. This paper proposes a methodology to extend this internal search paradigm to imperfect information games, specifically focusing on No-Limit Texas Hold'em poker.
+
+Poker presents unique challenges due to stochastic elements (card dealing) and incomplete information (opponent's private cards). Our core principle is to train an LLM to generate a linearized search trace that emulates the step-by-step reasoning process and Expected Value (EV) evaluations of a sophisticated game-theoretic poker solver. Instead of the LLM performing explicit, computationally intensive rollouts during inference, it learns to predict the *outcomes* of such deep explorations by generating a structured textual "thought process" annotated with EV estimates derived from solver data during its training phase.
+
+**2. Structure of the Linearized Search Trace**
+
+The LLM's internal search is materialized as a sequentially generated text trace. This trace utilizes special tokens and keywords to delineate different types of nodes (decision points, chance events) and actions, making the search process interpretable and learnable.
+
+**2.1. Overall Format**
+The trace begins with the current game context (e.g., public board cards, pot size, stack sizes, action history, player positions) and Hero's private hand. The LLM then autoregressively generates segments representing exploration of different strategic lines.
+
+**2.2. Node Types and Representations**
+
+*   **Hero Decision Nodes:**
+    *   **Context:** Full public game state, Hero's private hole cards, and action history leading to this decision point.
+    *   **LLM Action Proposal:** The LLM first proposes a set of its own strategically relevant actions (e.g., check, fold, call, bet small, bet medium, bet large). The specific bet sizes considered can be a canonical set or learned.
+    *   **Immediate EV Estimation:** For each proposed action, the LLM outputs an "immediate EV estimate." This EV is predicted by the LLM's internal value function, which has been trained to approximate the **full, game-theoretic Expected Value (EV) calculated by a poker solver for Hero taking that specific action from the current state.** This solver-derived EV inherently accounts for all possible opponent responses, all possible future cards, and assumes optimal play from both sides for the remainder of the hand.
+    *   *Example Snippet:*
+        ```
+        <Context board=AhKhQs pot=25bb hero_hand=AdJd ...>
+        <HeroFlopDecision>
+          <ProposeAction action=check immediate_ev=+0.5bb />
+          <ProposeAction action=bet_12bb immediate_ev=+1.8bb />
+          <ProposeAction action=bet_25bb immediate_ev=+1.2bb />
+        </HeroFlopDecision>
+        ```
+
+*   **Opponent Decision Nodes:**
+    *   **Context:** Game state following a specific action taken by Hero. The LLM does not know the opponent's private cards but has access to the history of opponent's actions.
+    *   **LLM Opponent Response Prediction:** The LLM generates a set of plausible opponent responses to Hero's action. The selection of which opponent responses to model is detailed in Section 3.3.
+    *   **State Transition:** Each predicted opponent response leads to a new game state and a subsequent EV estimation from Hero's perspective.
+    *   *Example Snippet (following Hero betting 12bb):*
+        ```
+        <OpponentFlopResponseToBet_12bb>
+          <PredictOpponentAction action=fold probability=0.4 ev_if_fold=+2.0bb /> // EV for Hero if opponent folds
+          <PredictOpponentAction action=call probability=0.5 leads_to_state=S1 />
+          <PredictOpponentAction action=raise_to_36bb probability=0.1 leads_to_state=S2 />
+        </OpponentFlopResponseToBet_12bb>
+        ```
+
+*   **Chance Nodes (Card Dealing):**
+    *   **Context:** Game state after a betting round has concluded and a new community card is to be dealt (e.g., post-flop action, pre-turn card).
+    *   **LLM Card Outcome Representation:** The LLM represents the stochastic nature of card dealing. The method for handling the numerous possible cards is detailed in Section 3.4 (Handling Chance Nodes). This typically involves abstracting card outcomes rather than enumerating individual cards.
+    *   *Example Snippet (after opponent calls flop bet, state S1):*
+        ```
+        <ChanceNodeFromStateS1 type=DealTurnCard>
+          <AbstractCardOutcome outcome=FlushDrawCompletes ev_for_hero_if_outcome=-2.5bb leads_to_state=S1_FlushTurn />
+          <AbstractCardOutcome outcome=BlankCard ev_for_hero_if_outcome=+1.5bb leads_to_state=S1_BlankTurn />
+          <AbstractCardOutcome outcome=HeroHitsTopPair ev_for_hero_if_outcome=+4.0bb leads_to_state=S1_HeroHitsTurn />
+        </ChanceNodeFromStateS1>
+        ```
+
+**2.3. State Transitions**
+The trace explicitly describes how actions and chance events lead to new game states. While not shown in the snippets above for brevity, a full state representation (updated board, pot, stacks, history) would follow each action or abstracted card outcome, allowing the LLM to condition its subsequent predictions on the evolved game context.
+
+**2.4. Illustrative Full Search Trace Example**
+
+To better illustrate the flow, consider the following extended example. Assume Hero is on the Button (BTN) and it's Hero's turn to act on the flop.
+
+```xml
+<GameContext stack_hero=100bb stack_opponent=100bb hero_pos=BTN opponent_pos=BB pot=5bb history="PREFLOP:HERO_RAISE_2.5BB,OPP_CALL">
+  <HeroHand cards="AsKd" />
+  <Board cards="Ah8c7d" />
+
+  <HeroFlopDecision> // Hero's initial decision point on the flop
+    <ProposeAction action="check" immediate_ev="+0.2bb" />
+    <ProposeAction action="bet_3bb" immediate_ev="+0.8bb" />
+    <ProposeAction action="bet_5bb" immediate_ev="+0.6bb" />
+    <ExpandHeroAction action="bet_3bb"> // LLM chooses to expand the line with highest immediate EV
+
+      <StateAfterHeroBet_3bb board="Ah8c7d" pot=8bb hero_stack=97bb opp_stack=97.5bb history_append="FLOP:HERO_BET_3BB">
+        <OpponentFlopResponseToBet_3bb> // Opponent's potential responses
+          <PredictOpponentAction action="fold" probability="0.3" ev_if_fold="+0.8bb_from_pot_capture" /> // EV for Hero if opponent folds
+          <PredictOpponentAction action="call" probability="0.6" ev_if_call_leads_to_state="S_OppCallsFlopBet">
+            <StateAfterOppCall_S_OppCallsFlopBet board="Ah8c7d" pot=14bb hero_stack=97bb opp_stack=94.5bb history_append=",OPP_CALL">
+              <ChanceNodeFromState_S_OppCallsFlopBet type="DealTurnCard">
+                <AbstractCardOutcome outcome="BlankTurnCard_2s" probability_abstract="0.5" ev_for_hero_if_outcome="+0.5bb_on_turn" leads_to_state="S_TurnIs2s">
+                  <StateAfterTurn_S_TurnIs2s board="Ah8c7d2s" pot=14bb hero_stack=97bb opp_stack=94.5bb history_append=",TURN_DEAL_2s">
+                    <HeroTurnDecision>
+                      <ProposeAction action="check" immediate_ev="+0.4bb" />
+                      <ProposeAction action="bet_7bb" immediate_ev="+1.0bb" />
+                      <DecisionForSubLine outcome="bet_7bb" backed_up_ev_for_turn_line="+1.0bb" />
+                    </HeroTurnDecision>
+                  </StateAfterTurn_S_TurnIs2s>
+                </AbstractCardOutcome>
+                <AbstractCardOutcome outcome="FlushDrawCompletingCard_Ts" probability_abstract="0.2" ev_for_hero_if_outcome="-1.5bb_on_turn" leads_to_state="S_TurnIsTs">
+                  <StateAfterTurn_S_TurnIsTs board="Ah8c7dTs" pot=14bb hero_stack=97bb opp_stack=94.5bb history_append=",TURN_DEAL_Ts">
+                    <HeroTurnDecision>
+                      <ProposeAction action="check" immediate_ev="-1.8bb" />
+                      <ProposeAction action="bet_7bb" immediate_ev="-2.5bb" /> // Bluffing into completed draw might be bad
+                      <DecisionForSubLine outcome="check" backed_up_ev_for_turn_line="-1.8bb" />
+                    </HeroTurnDecision>
+                  </StateAfterTurn_S_TurnIsTs>
+                </AbstractCardOutcome>
+                // ... potentially other abstract card outcomes ...
+                <AggregatedEVFromTurnCardOutcomes ev_for_hero_after_turn="+0.1bb" /> // Weighted average EV after considering turn outcomes
+              </ChanceNodeFromState_S_OppCallsFlopBet>
+            </StateAfterOppCall_S_OppCallsFlopBet>
+          </PredictOpponentAction>
+          <PredictOpponentAction action="raise_to_10bb" probability="0.1" ev_if_raise_leads_to_state="S_OppRaisesFlopBet">
+            <StateAfterOppRaise_S_OppRaisesFlopBet board="Ah8c7d" pot=21bb hero_stack=97bb hero_to_call=7bb opp_stack=87.5bb history_append=",OPP_RAISE_10BB">
+              <HeroFlopDecisionFacingRaise>
+                <ProposeAction action="fold" immediate_ev="-0.3bb_loss_of_initial_bet" />
+                <ProposeAction action="call_7bb" immediate_ev="-0.9bb" />
+                <DecisionForSubLine outcome="fold" backed_up_ev_for_flop_vs_raise_line="-0.3bb" />
+              </HeroFlopDecisionFacingRaise>
+            </StateAfterOppRaise_S_OppRaisesFlopBet>
+          </PredictOpponentAction>
+          <AggregatedEVFromOpponentResponses ev_for_hero_after_flop_responses="+0.45bb" /> // Weighted average EV after opponent's flop actions
+        </OpponentFlopResponseToBet_3bb>
+      </StateAfterHeroBet_3bb>
+    </ExpandHeroAction>
+    // ... Potentially expand other Hero actions like "check" if N > 1 in Sec 3.2 ...
+    <FinalDecisionForHeroFlopAction action="bet_3bb" overall_backed_up_ev="+0.45bb" />
+  </HeroFlopDecision>
+</GameContext>
+```
+
+This example trace showcases:
+*   Initial Hero decision with immediate EV estimates.
+*   Expansion of one Hero action (`bet_3bb`).
+*   Prediction of opponent responses with probabilities and resulting states/EVs.
+*   A chance node for the turn card, using abstracted card outcomes.
+*   A subsequent Hero decision node on the turn for one of the turn card outcomes.
+*   "DecisionForSubLine" and "AggregatedEV" tags to show how values might be notionally summarized or backed up.
+*   A final decision for Hero based on the explored line.
+Note: The EV values and probabilities are purely illustrative. The `history_append` attribute shows how the game history string would be updated.
+
+**3. Selective Expansion Strategy**
+
+To make the internal search computationally tractable within an LLM's context window and inference time, a selective expansion strategy is crucial. The LLM cannot explore all possible branches of the vast poker game tree. Instead, it must learn to focus on the most salient and strategically relevant lines of play.
+
+**3.1. Motivation**
+The goal of selective expansion is to prune unpromising or less critical branches of the search tree early, allowing the LLM to dedicate its "reasoning capacity" to exploring more impactful sequences of events. This mimics human expert reasoning, where players intuitively focus on the most likely or game-changing scenarios.
+
+**3.2. Expanding Hero's Actions**
+When it is Hero's turn to act, the LLM first performs an initial evaluation of a canonical set of its available strategic actions (e.g., check, bet small, bet medium, bet large, fold if applicable). As per user preference for simplicity and intuitiveness, the decision to further "explore" or "expand" a specific action line within the generated trace is primarily driven by these initial immediate EV estimates. The LLM will preferentially generate deeper search traces for the top N actions that yield the highest immediate EVs. This ensures that the most promising initial moves are subjected to more detailed lookahead. The number N can be a fixed parameter or dynamically determined.
+
+*Example: If `bet_12bb` has the highest immediate EV from `<HeroFlopDecision>`, the subsequent trace segments will primarily focus on the consequences of `bet_12bb`.*
+
+**3.3. Expanding Opponent's Actions**
+When modeling opponent responses, the LLM will not generate branches for every conceivable opponent action or bet size. This is crucial for tractability. Instead of attempting to define "strategically critical" but potentially low-probability moves through a separate complex heuristic, we simplify by directly leveraging the output of the GTO solver used for generating training data.
+
+The training data, derived from solver outputs, will guide the LLM to focus on:
+*   **Solver-Played Responses:** Opponent actions that the GTO solver plays with a frequency above a predefined threshold (e.g., >1% or >5% in a given situation).
+This ensures that the LLM learns to anticipate and evaluate common and strategically sound opponent lines as determined by the solver. Very rare actions, or minute variations in bet sizing that the solver does not frequently employ, will be excluded from the training traces. This approach simplifies data generation and focuses the LLM's learning on the most relevant parts of the opponent's strategy.
+
+**3.4. Handling Chance Nodes (Card Abstraction)**
+A significant challenge in poker is the large number of possible cards that can be dealt on the turn or river (e.g., ~45-47 possibilities). Enumerating each card as a distinct branch in the linearized trace is infeasible and would overwhelm the LLM.
+
+Our approach is **Outcome Abstraction**:
+*   **The Challenge:** We cannot list all ~46 turn cards and their subsequent play.
+*   **The Solution:** Instead of individual cards, the LLM's search trace will represent future card outcomes through a limited set of *abstracted board textures* or *strategically significant categories*. Examples include:
+    *   "Flush-Completing Card"
+    *   "Straight-Completing Card"
+    *   "Board-Pairing Card"
+    *   "Overcard to Current Board"
+    *   "Inert/Blank Card" (a card that doesn't significantly change the board texture or hand strengths).
+*   **Solver-Derived Ground Truth:** The ground truth EVs for these abstracted outcomes come from the poker solver. The solver, in its comprehensive calculations, considers all individual cards and their probabilities. The EV associated with an "AbstractCardOutcome" in our training data is effectively the weighted average EV over all actual cards that fall into that strategic category.
+*   **LLM's Task:** The LLM learns to predict the EV for Hero conditional on one of these abstracted outcomes occurring. The trace might show a few such abstract outcomes for each chance node, representing the most impactful shifts in game dynamics. The selection of which abstract outcomes to include in a trace would be guided by their impact on EV, as seen in solver data.
+
+This abstraction makes the search tractable while still allowing the LLM to reason about the impact of different types of future board developments.
+
+**4. Value Estimation and Propagation**
+
+The core of the internal search lies in the LLM's ability to estimate the EV of game states and actions, and to understand how these values propagate through the search tree.
+
+**4.1. Internal Value Function**
+The LLM incorporates an internal value function. This function is not explicitly defined but is an emergent property of its training on solver-generated data. It learns to map a given game state (represented textually in the trace, including public information, action history, and Hero's hand) to an EV estimate for Hero. This is achieved by training the LLM to predict the EV annotations present in the ground truth search traces.
+
+**4.2. Node Evaluation**
+At each significant node in the generated trace (e.g., after Hero proposes an action, after an opponent responds, after an abstracted card outcome), the LLM outputs its EV estimate for Hero in that specific scenario.
+
+**4.3. Backed-Up Values for Decision Making (Approximating Bellman Updates)**
+The primary purpose of the multi-step trace is to allow the LLM to make an initial decision based on a deeper lookahead, rather than just immediate EV. The EV of an initial action by Hero is determined by the expected values of the future states it might lead to.
+*   Consider an initial Hero action, `A_hero_initial`.
+*   The trace explores subsequent opponent actions (`A_opp_1, A_opp_2, ...`) with some probability or likelihood.
+*   Following these, chance events (abstracted card outcomes `C_1, C_2, ...`) occur.
+*   This may lead to further decision nodes for Hero or the opponent deeper in the trace.
+The EV of `A_hero_initial` is then conceptually a "backed-up" value derived from the EVs of these subsequent states, weighted by their perceived probabilities (if modeled). For example, `EV(A_hero_initial) = sum over opponent_responses [P(A_opp) * EV_after_A_opp]`, where `EV_after_A_opp` itself might be `sum over card_outcomes [P(C) * EV_after_C]`.
+The LLM learns this propagation implicitly by being trained to predict entire traces where the initial action's ultimate selection is consistent with the deeper evaluations shown in that trace. This process mimics the Bellman equation in reinforcement learning, where the value of a state is related to the values of successor states.
+
+**5. Training the Internal Search LLM**
+
+**5.1. Data Generation**
+Training this LLM requires a vast dataset of poker game scenarios. A high-quality poker solver (e.g., based on Counterfactual Regret Minimization) is used to:
+*   Generate optimal or near-optimal strategies for various game situations.
+*   For each decision point Hero faces, provide:
+    *   The solver's recommended action(s).
+    *   The EV of taking these actions.
+    *   The EVs of alternative actions.
+    *   The likely distribution of opponent responses (according to their GTO strategy).
+    *   The EV for Hero following these opponent responses.
+    *   The EV for Hero after various abstracted turn and river card outcomes.
+
+**5.2. Formatting Ground Truth Traces**
+The raw solver data must be meticulously converted into the linearized search trace format described in Section 2 and 3. This involves making decisions about:
+*   The depth and breadth of example traces (e.g., how many Hero actions to expand, how many opponent responses, how many abstracted card outcomes).
+*   The specific keywords and structure to use.
+*   The level of detail in state representations.
+
+**5.3. Learning Objective**
+The LLM is trained autoregressively on these ground truth search traces. Its objective is to predict the next token in the sequence, given the preceding tokens. By doing so, the LLM learns to:
+*   Generate the structural elements of the search trace (node tags, action proposals).
+*   Predict strategically sound actions for Hero.
+*   Predict plausible responses for the opponent.
+*   Correctly identify and evaluate abstracted card outcomes.
+*   Most importantly, generate accurate EV annotations at each relevant step, consistent with the solver's calculations.
+*   Ultimately, select a final action for Hero that is justified by the "backed-up" values within its generated trace.
+
+**6. Inference: LLM as a Step-by-Step Poker "Solver"**
+
+During inference (actual play):
+1.  Hero is faced with a decision. The current game state (public cards, pot, stacks, history, Hero's hand) is formatted as an initial prompt.
+2.  The LLM autoregressively generates its internal search trace, starting from this prompt. It "thinks" by writing out the exploration of different lines, opponent responses, and card outcomes, along with their EV estimates.
+3.  The generation process continues until a predetermined depth is reached, or a quiescent state is achieved in the explored lines.
+4.  The trace culminates in a final "Playing:" directive, where the LLM states the action it will take. This action is chosen based on which initial Hero move led to the highest overall backed-up EV through its multi-step simulated lookahead.
+
+**7. Conclusion and Future Directions**
+
+This methodology proposes a novel approach to imbue LLMs with sophisticated poker-playing capabilities by training them to generate internal search traces that mimic the reasoning and evaluation processes of game-theoretic solvers. The key innovations lie in the design of the linearized trace structure for imperfect information games, the strategies for selective expansion (particularly for opponent actions and chance nodes via card abstraction), and the concept of the LLM learning to approximate Bellman-like value propagation.
+
+This approach offers potential benefits in terms of interpretability (the LLM's "thought process" is explicit) and the ability to capture complex, multi-step strategic reasoning. Future work will focus on refining the trace format, exploring more sophisticated methods for selective expansion, optimizing the training data generation pipeline, and rigorously evaluating the playing strength of LLMs trained with this methodology against established poker benchmarks and expert human players. Addressing the challenges of large context windows and efficient training for such detailed traces will also be critical. 

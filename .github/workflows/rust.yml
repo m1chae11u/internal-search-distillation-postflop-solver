@@ -1,0 +1,36 @@
+name: Rust
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: --deny warnings
+  RUSTDOCFLAGS: --deny warnings
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install nightly
+      run: |
+        rustup toolchain install nightly
+        rustup +nightly component add clippy
+    - name: Build
+      run: |
+        cargo build --release --features zstd
+        cargo +nightly build --release --features custom-alloc
+        cargo run --release --example basic
+        cargo run --release --example file_io
+        cargo run --release --example node_locking
+    - name: Run tests
+      run: |
+        cargo test --release --features zstd
+        cargo +nightly test --release --features custom-alloc -- --test-threads 1
+    - name: Clippy
+      run: |
+        cargo clippy --release --features zstd -- -A clippy::needless_range_loop
+        cargo +nightly clippy --release --features custom-alloc -- -A clippy::needless_range_loop
+    - name: Check formatting
+      run: cargo fmt --all --check
+    - name: Check documentation
+      run: cargo doc --release
