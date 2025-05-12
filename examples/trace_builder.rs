@@ -1,8 +1,11 @@
 use postflop_solver_ffi::*;
 use serde_json::{json, Value as JsonValue};
-use std::fs::File;
+use std::fs::{File, self};
 use csv::Reader;
 use std::io::Write;
+use std::path::Path;
+use rayon::ThreadPoolBuilder;
+use num_cpus;
 // use rand_distr::{Distribution, WeightedIndex};
 
 fn chips_to_bb(chips: f32, starting_stack_num: f32) -> f32 {
@@ -94,10 +97,10 @@ fn action_eval(
 
     for (action_index, action) in actions.iter().enumerate() {
         // Calculate average strategy probability for this action
-        let start_index = action_index * num_hands;
-        let end_index = (action_index + 1) * num_hands;
-        if end_index <= strategy_at_decision_node.len() {
-            let action_strategy_slice = &strategy_at_decision_node[start_index..end_index];
+        let start_index_slice = action_index * num_hands;
+        let end_index_slice = (action_index + 1) * num_hands;
+        if end_index_slice <= strategy_at_decision_node.len() {
+            let action_strategy_slice = &strategy_at_decision_node[start_index_slice..end_index_slice];
             let average_strategy_prob = compute_average(action_strategy_slice, &initial_weights);
 
             game.play(action_index);
@@ -194,27 +197,27 @@ fn run_solver_for_gamestate(
 ) -> JsonValue {
 
     let target_exploitability = pot_size * exploitability_pct_pot_target;
-    let mut turn_board_str = turn_board_str.to_string();
-    let mut river_board_str = river_board_str.to_string();
+    let mut turn_board_str_mut = turn_board_str.to_string();
+    let mut river_board_str_mut = river_board_str.to_string();
 
     if evaluation_at == "Flop" {
-        turn_board_str = String::new();
-        river_board_str = String::new();
+        turn_board_str_mut = String::new();
+        river_board_str_mut = String::new();
     } else if evaluation_at == "Turn" {
-        river_board_str = String::new();
+        river_board_str_mut = String::new();
     }
 
     let card_config = CardConfig {
         range: [oop_range.parse().unwrap(), ip_range.parse().unwrap()],
         flop: flop_from_str(flop_board_str).unwrap(),
-        turn: if turn_board_str.is_empty() { NOT_DEALT } else { card_from_str(&turn_board_str).unwrap() },
-        river: if river_board_str.is_empty() { NOT_DEALT } else { card_from_str(&river_board_str).unwrap() },
+        turn: if turn_board_str_mut.is_empty() { NOT_DEALT } else { card_from_str(&turn_board_str_mut).unwrap() },
+        river: if river_board_str_mut.is_empty() { NOT_DEALT } else { card_from_str(&river_board_str_mut).unwrap() },
     };
 
     // Determine the initial board state based on the provided cards
-    let initial_board_state = if !river_board_str.is_empty() {
+    let initial_board_state = if !river_board_str_mut.is_empty() {
         BoardState::River
-    } else if !turn_board_str.is_empty() {
+    } else if !turn_board_str_mut.is_empty() {
         BoardState::Turn
     } else {
         BoardState::Flop
@@ -232,7 +235,7 @@ fn run_solver_for_gamestate(
         rake_cap: 0.0,
         flop_bet_sizes: [bet_sizes.clone(), bet_sizes.clone()], // [OOP, IP]
         turn_bet_sizes: [bet_sizes.clone(), bet_sizes.clone()],
-        river_bet_sizes: [bet_sizes.clone(), bet_sizes],
+        river_bet_sizes: [bet_sizes.clone(), bet_sizes.clone()], // Corrected, was `bet_sizes`
         turn_donk_sizes: None, // use default bet sizes
         river_donk_sizes: Some(DonkSizeOptions::try_from("50%").unwrap()),
         add_allin_threshold: 1.5, // add all-in if (maximum bet size) <= 1.5x pot
@@ -261,17 +264,17 @@ fn run_solver_for_gamestate(
         chips_to_bb(tree_config.starting_pot as f32, starting_stack_size),
         chips_to_bb(tree_config.effective_stack as f32, starting_stack_size),
         flop_board_str, 
-        turn_board_str, 
-        river_board_str, 
-        ip_range, // This is already a string
-        oop_range, // This is already a string
+        turn_board_str_mut,
+        river_board_str_mut,
+        ip_range, 
+        oop_range, 
         format_bet_sizes(&tree_config.flop_bet_sizes[0]),
         format_bet_sizes(&tree_config.flop_bet_sizes[1]),
         format_bet_sizes(&tree_config.turn_bet_sizes[0]),
         format_bet_sizes(&tree_config.turn_bet_sizes[1]),
         format_bet_sizes(&tree_config.river_bet_sizes[0]),
         format_bet_sizes(&tree_config.river_bet_sizes[1]),
-        format_donk_sizes(&tree_config.river_donk_sizes), // Corrected to river_donk_sizes as per typical usage, adjust if turn_donk_sizes was intended for this field
+        format_donk_sizes(&tree_config.river_donk_sizes), 
         tree_config.add_allin_threshold,
         tree_config.force_allin_threshold,
     );
@@ -279,7 +282,7 @@ fn run_solver_for_gamestate(
 
     // build the game tree
     // `ActionTree` can be edited manually after construction
-    let action_tree = ActionTree::new(tree_config).unwrap();
+    let action_tree = ActionTree::new(tree_config.clone()).unwrap();
     let mut game = PostFlopGame::with_config(card_config, action_tree).unwrap();
 
     // check memory usage
@@ -307,13 +310,13 @@ fn run_solver_for_gamestate(
     let oop_ev_at_decision_node = game.expected_values(0); // EV for each hand
     let oop_hands_str = holes_to_strings(game.private_cards(0)).unwrap_or_default();
     
-    let mut indexed_evs: Vec<(usize, f32)> = oop_ev_at_decision_node.iter().cloned().enumerate().collect();
-    indexed_evs.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut indexed_evs_oop: Vec<(usize, f32)> = oop_ev_at_decision_node.iter().cloned().enumerate().collect();
+    indexed_evs_oop.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     
     println!("\n Top 3 OOP Hands by EV at this node");
-    for i in 0..std::cmp::min(3, indexed_evs.len()) {
-        let (hand_idx, ev_val) = indexed_evs[i];
+    for i in 0..std::cmp::min(3, indexed_evs_oop.len()) {
+        let (hand_idx, ev_val) = indexed_evs_oop[i];
         if hand_idx < oop_hands_str.len() {
             println!("Hand {}: {}, EV: {:.2}bb", i + 1, oop_hands_str[hand_idx], chips_to_bb(ev_val, starting_stack_size));
         }
@@ -323,12 +326,12 @@ fn run_solver_for_gamestate(
     let ip_ev_at_decision_node = game.expected_values(1); // EV for each hand
     let ip_hands_str = holes_to_strings(game.private_cards(1)).unwrap_or_default();
 
-    let mut indexed_evs: Vec<(usize, f32)> = ip_ev_at_decision_node.iter().cloned().enumerate().collect();
-    indexed_evs.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut indexed_evs_ip: Vec<(usize, f32)> = ip_ev_at_decision_node.iter().cloned().enumerate().collect();
+    indexed_evs_ip.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     println!("\n Top 3 IP Hands by EV at this node");
-    for i in 0..std::cmp::min(3, indexed_evs.len()) {
-        let (hand_idx, ev_val) = indexed_evs[i];
+    for i in 0..std::cmp::min(3, indexed_evs_ip.len()) {
+        let (hand_idx, ev_val) = indexed_evs_ip[i];
         if hand_idx < ip_hands_str.len() {
             println!("Hand {}: {}, EV: {:.2}bb", i + 1, ip_hands_str[hand_idx], chips_to_bb(ev_val, starting_stack_size));
         }
@@ -349,39 +352,33 @@ fn run_solver_for_gamestate(
         "No OOP actions available/evaluated".to_string()
     } else {
         let mut best_action_original_index = 0;
-        let mut max_freq = -1.0_f32; // Initialize with a value lower than any possible frequency
+        let mut max_freq = -1.0_f32; 
         let mut chosen_oop_action_details: Option<Action> = None;
-        let mut temp_chosen_json_str: String = "Error: Action not chosen".to_string(); // MODIFIED: temporary holder for the JSON string
+        let mut temp_chosen_json_str: String = "Error: Action not chosen".to_string(); 
 
-        // The index `i` from enumerate() corresponds to the index in game.available_actions()
-        // at the time oop_action_data was generated.
-        for (i, (action, freq, _ev, json_str_for_this_action)) in oop_action_data.iter().enumerate() { // MODIFIED: unpack json_str_for_this_action
+        for (i, (action, freq, _ev, json_str_for_this_action)) in oop_action_data.iter().enumerate() { 
             if *freq > max_freq {
                 max_freq = *freq;
                 best_action_original_index = i;
                 chosen_oop_action_details = Some(*action);
-                temp_chosen_json_str = json_str_for_this_action.clone(); // MODIFIED: capture the specific JSON string
+                temp_chosen_json_str = json_str_for_this_action.clone(); 
             }
         }
 
         if let Some(action_to_play) = chosen_oop_action_details {
-            // Before playing, check if the action is still valid and available.
-            // This ensures robustness, though in this specific sequential flow, it should be.
             let current_oop_actions = game.available_actions();
             if best_action_original_index < current_oop_actions.len() && current_oop_actions[best_action_original_index] == action_to_play {
                 game.play(best_action_original_index);
                 println!("OOP played action (highest frequency): {:?} with frequency {:.3}", action_to_play, max_freq);
-                temp_chosen_json_str // MODIFIED: use the captured JSON string
+                temp_chosen_json_str 
             } else {
-                // This case indicates a logic error or unexpected state change if action_to_play was found but cannot be played.
                 println!("Error: Mismatch or index out of bounds when trying to play OOP's highest frequency action. Action: {:?}, Index: {}", action_to_play, best_action_original_index);
                 println!("Current available OOP actions: {:?}", current_oop_actions);
-                format!("Error playing OOP action: {:?} (intended JSON: {})", action_to_play, temp_chosen_json_str) // MODIFIED
+                format!("Error playing OOP action: {:?} (intended JSON: {})", action_to_play, temp_chosen_json_str) 
             }
         } else {
-            // This case implies oop_action_data was not empty, but no valid action was found (e.g., all frequencies <= -1.0).
             println!("Could not determine OOP highest frequency action (e.g., all actions had zero or invalid frequency).");
-            println!("OOP action data for context: {:?}", oop_action_data); // For debugging
+            println!("OOP action data for context: {:?}", oop_action_data); 
             "Could not determine highest_freq OOP action (data invalid/empty)".to_string()
         }
     };
@@ -399,20 +396,15 @@ fn run_solver_for_gamestate(
         "No IP actions available/evaluated".to_string()
     } else {
         let mut max_ip_freq = -1.0_f32;
-        // let mut chosen_ip_action_details: Option<Action> = None; // Not strictly needed if we only need the string
         let mut temp_chosen_ip_json_str: String = "Error: IP Action not chosen".to_string();
 
         for (_action, freq, _ev, json_str_for_this_action) in ip_action_data.iter() {
             if *freq > max_ip_freq {
                 max_ip_freq = *freq;
-                // chosen_ip_action_details = Some(*action); // Store details if needed later
                 temp_chosen_ip_json_str = json_str_for_this_action.clone();
             }
         }
-        // Here, you could add a game.play() if you wanted to advance the game state
-        // based on the chosen IP action, similar to how it's done for OOP.
-        // For now, just printing the chosen action for logging.
-        if max_ip_freq > -1.0 { // Check if a valid action was found
+        if max_ip_freq > -1.0 { 
             println!("Highest frequency IP action (for JSON output): {} with frequency {:.3}", temp_chosen_ip_json_str, max_ip_freq);
         } else {
             println!("Could not determine IP highest frequency action (e.g., all actions had zero or invalid frequency).");
@@ -449,33 +441,110 @@ fn run_solver_for_gamestate(
             "exploitability_pct_pot_target": exploitability_pct_pot_target,
             "target_exploitability": target_exploitability,
             "actual_exploitability": exploitability,
-            "max_num_iterations": max_num_iterations
+            "max_num_iterations": max_num_iterations,
+            "tree_config": format!("{:?}", tree_config)
         }
     });
 
     result_json
 }
 
+fn save_checkpoint(results: &Vec<JsonValue>, file_path: &str) {
+    println!("Attempting to save checkpoint with {} results to {}...", results.len(), file_path);
+    match serde_json::to_string_pretty(results) {
+        Ok(json_output) => {
+            // Ensure we write "[]" for an empty vector, not an empty string.
+            // serde_json::to_string_pretty will correctly produce "[]" for an empty Vec.
+            match File::create(file_path) {
+                Ok(mut outfile) => {
+                    if let Err(e) = outfile.write_all(json_output.as_bytes()) {
+                        eprintln!("Failed to write JSON to checkpoint file {}: {}", file_path, e);
+                    } else {
+                        println!("Successfully wrote checkpoint with {} results to {}", results.len(), file_path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to create checkpoint file {}: {}", file_path, e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to serialize results for checkpoint: {}", e);
+        }
+    }
+}
+
 fn main() {
-    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/search_trace_prep/search_trace_prep_output.json"; // Define the output file path
+    // Configure Rayon's global thread pool
+    let num_cpus = num_cpus::get();
+    let num_threads = (num_cpus as f64 * 0.5).ceil() as usize;
+    println!(
+        "Configuring Rayon to use {} threads (50% of {} available CPUs, rounded up).",
+        num_threads, num_cpus
+    );
+    ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .unwrap();
+
+    const CHECKPOINT_INTERVAL: usize = 100;
+    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/search_trace_prep/search_trace_prep_output.json";
+    let csv_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/examples/test3.csv";
+
     let mut all_results: Vec<JsonValue> = Vec::new();
-    match File::open("/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/examples/test3.csv") {
+    let start_index: usize;
+
+    if Path::new(outpath_file_path).exists() {
+        println!("Checkpoint file found at {}. Attempting to load.", outpath_file_path);
+        match fs::read_to_string(outpath_file_path) {
+            Ok(contents) => {
+                if contents.trim().is_empty() {
+                    println!("Checkpoint file is empty. Starting fresh.");
+                    all_results = Vec::new();
+                } else {
+                    match serde_json::from_str(&contents) {
+                        Ok(parsed_results) => {
+                            all_results = parsed_results;
+                            println!("Successfully loaded {} results from checkpoint.", all_results.len());
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to parse JSON from checkpoint file {}: {}. Starting fresh.", outpath_file_path, e);
+                            all_results = Vec::new(); 
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read checkpoint file {}: {}. Starting fresh.", outpath_file_path, e);
+                all_results = Vec::new();
+            }
+        }
+    } else {
+        println!("No checkpoint file found at {}. Starting fresh.", outpath_file_path);
+    }
+    start_index = all_results.len();
+    if start_index > 0 {
+        println!("Skipping first {} records from CSV as they are already processed.", start_index);
+    }
+
+    match File::open(csv_file_path) {
         Ok(file) => {
             let mut rdr = Reader::from_reader(file);
-            for (i, result) in rdr.records().enumerate() {
+            for (loop_idx, result) in rdr.records().skip(start_index).enumerate() {
+                let original_csv_row_num = loop_idx + start_index + 1;
                 match result {
                     Ok(record) => {
-                        println!("\n--- Processing Gamestate {} from CSV ---", i + 1);
-                        let oop_range = record.get(10).expect("CSV must contain oop_range at column 0").to_string();
-                        let ip_range = record.get(12).expect("CSV must contain ip_range at column 1").to_string();
+                        println!("\n--- Processing row {} from CSV ---", original_csv_row_num);
+                        let oop_range = record.get(10).expect("CSV must contain oop_range at column 10").to_string();
+                        let ip_range = record.get(12).expect("CSV must contain ip_range at column 12").to_string();
                         let flop_board_str = record.get(2).expect("CSV must contain flop_board_str at column 2").to_string();
                         let turn_board_str_csv = record.get(3).expect("CSV must contain turn_board_str at column 3").to_string();
                         let river_board_str_csv = record.get(4).expect("CSV must contain river_board_str at column 4").to_string();
-                        let max_num_iterations = 1000; //int
-                        let exploitability_pct_pot_target = 0.0025; //float .25% of the pot
-                        let pot_size = record.get(14).expect("CSV must contain pot_size at column 11").parse::<f32>().unwrap();
-                        let eff_stack = record.get(15).expect("CSV must contain eff_stack at column 13").parse::<f32>().unwrap();
-                        let starting_stack_size = 200.0; //float
+                        let max_num_iterations = 1000; 
+                        let exploitability_pct_pot_target = 0.0025; 
+                        let pot_size = record.get(14).expect("CSV must contain pot_size at column 14").parse::<f32>().unwrap();
+                        let eff_stack = record.get(15).expect("CSV must contain eff_stack at column 15").parse::<f32>().unwrap();
+                        let starting_stack_size = 200.0; 
                         let evaluation_at = record.get(7).expect("CSV must contain evaluation_at at column 7").to_string();
                         
                         let result_json = run_solver_for_gamestate(
@@ -491,37 +560,31 @@ fn main() {
                             starting_stack_size,
                             &evaluation_at
                         );
-                        all_results.push(result_json); // Store the result
-                        // println!("{}", serde_json::to_string_pretty(&result_json).unwrap_or_else(|e| format!("Failed to serialize JSON: {}", e))); // Removed individual printing
-                    }
-                    Err(e) => {
-                        println!("Error processing gamestate {}: {}", i + 1, e);
-                    }
-                }
-            }
-            // Serialize all collected results to a JSON string
-            let json_output = serde_json::to_string_pretty(&all_results).unwrap_or_else(|e| {
-                eprintln!("Failed to serialize JSON array: {}", e); // Print error to stderr
-                String::new() // Return an empty string or handle error appropriately
-            });
-
-            if !json_output.is_empty() {
-                match File::create(outpath_file_path) {
-                    Ok(mut outfile) => {
-                        if let Err(e) = outfile.write_all(json_output.as_bytes()) {
-                            eprintln!("Failed to write JSON to file {}: {}", outpath_file_path, e);
-                        } else {
-                            println!("Successfully wrote JSON output to {}", outpath_file_path);
+                        all_results.push(result_json); 
+                        
+                        let num_processed_in_this_run = all_results.len() - start_index;
+                        if num_processed_in_this_run > 0 && num_processed_in_this_run % CHECKPOINT_INTERVAL == 0 {
+                            save_checkpoint(&all_results, outpath_file_path);
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to create output file {}: {}", outpath_file_path, e);
+                        eprintln!("Error processing CSV row {}: {}", original_csv_row_num, e);
                     }
                 }
             }
+            if !all_results.is_empty() {
+                 println!("Processing complete. Performing final save...");
+                 save_checkpoint(&all_results, outpath_file_path);
+            } else if start_index == 0 {
+                 println!("Processing complete. No new items processed. Ensuring empty output file or array.");
+                 save_checkpoint(&all_results, outpath_file_path);
+            } else {
+                 println!("Processing complete. No new items processed since last checkpoint.");
+            }
+
         }
         Err(e) => {
-            eprintln!("Failed to open file: {}", e);
+            eprintln!("Failed to open CSV file {}: {}", csv_file_path, e);
         }
     }
 }
