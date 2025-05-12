@@ -477,19 +477,20 @@ fn save_checkpoint(results: &Vec<JsonValue>, file_path: &str) {
 fn main() {
     // Configure Rayon's global thread pool
     let num_cpus = num_cpus::get();
-    let num_threads = (num_cpus as f64 * 0.5).ceil() as usize;
+    let cpu_usage_pct = 0.33;
+    let num_threads = (num_cpus as f64 * cpu_usage_pct).ceil() as usize;
     println!(
-        "Configuring Rayon to use {} threads (50% of {} available CPUs, rounded up).",
-        num_threads, num_cpus
+        "Configuring Rayon to use {} threads ({}% of {} available CPUs, rounded up).",
+        num_threads, cpu_usage_pct * 100.0, num_cpus
     );
     ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
         .unwrap();
 
-    const CHECKPOINT_INTERVAL: usize = 100;
-    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/search_trace_prep/search_trace_prep_output.json";
-    let csv_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/examples/test3.csv";
+    const CHECKPOINT_INTERVAL: usize = 2;
+    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/search_trace_checkpointing/search_trace_checkpointing_output.json";
+    let csv_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/examples/test1.csv";
 
     let mut all_results: Vec<JsonValue> = Vec::new();
     let start_index: usize;
