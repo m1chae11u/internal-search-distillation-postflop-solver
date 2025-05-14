@@ -2,3 +2,9 @@
 Cargo.lock
 *.csv
 *.json
+*.pt
+*.pth
+*.safetensors
+*.pyc
+*.bin
+*sft_model_weights

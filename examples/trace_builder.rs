@@ -477,7 +477,7 @@ fn save_checkpoint(results: &Vec<JsonValue>, file_path: &str) {
 fn main() {
     // Configure Rayon's global thread pool
     let num_cpus = num_cpus::get();
-    let cpu_usage_pct = 0.33;
+    let cpu_usage_pct = 0.30;
     let num_threads = (num_cpus as f64 * cpu_usage_pct).ceil() as usize;
     println!(
         "Configuring Rayon to use {} threads ({}% of {} available CPUs, rounded up).",
@@ -489,8 +489,8 @@ fn main() {
         .unwrap();
 
     const CHECKPOINT_INTERVAL: usize = 2;
-    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/search_trace_checkpointing/search_trace_checkpointing_output.json";
-    let csv_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/examples/test1.csv";
+    let outpath_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/turn_river_search_tree_checkpointing/turn_river_search_tree_checkpointing_output.json";
+    let csv_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/turn_river_rows.csv";
 
     let mut all_results: Vec<JsonValue> = Vec::new();
     let start_index: usize;

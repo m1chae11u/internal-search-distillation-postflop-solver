@@ -1,0 +1,22 @@
+INPUT_STRING:
+<GameState {insert here the string value from "game_context_str" in "1. GameState"} />
+
+
+OUTPUT_STRING:
+<RangeSummary {insert here the string value from "2. RangeEval"} />
+
+<OOP>
+  {insert here the string value from "3. OOP_Action_RangeEval"}
+</OOP>
+
+<OOP action={insert here the string value from "OOP high_freq_action" in "4. Expand_OOP_Action"}>
+
+  <RangeSummary {insert here the string value from "RangeEval" in "4. Expand_OOP_Action"} />
+
+  <IP>
+    {insert here the string value from "IP_Action_RangeEval" in "4. Expand_OOP_Action"}
+  </IP>
+
+</OOP>
+
+<IP_highest_freq_action action={insert here the string value from "action" in "5. IP_highest_freq_action"} />
