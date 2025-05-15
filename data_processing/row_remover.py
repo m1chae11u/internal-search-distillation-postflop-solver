@@ -61,8 +61,8 @@ def remove_leading_csv_rows(input_csv_path: str, num_rows_to_remove: int, output
 if __name__ == '__main__':
     # --- USER MODIFIABLE VARIABLES ---
     # Please modify these paths and the number of rows to suit your needs.
-    INPUT_CSV_FILE_PATH = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/old/old_turn_river_rows.csv"
-    NUMBER_OF_ROWS_TO_REMOVE = 22369   
+    INPUT_CSV_FILE_PATH = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/turn_river_rows.csv"
+    NUMBER_OF_ROWS_TO_REMOVE = 32418   
     OUTPUT_CSV_FILE_PATH = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/turn_river_rows.csv"
     # --- END OF USER MODIFIABLE VARIABLES ---
 
@@ -70,4 +70,5 @@ if __name__ == '__main__':
     remove_leading_csv_rows(INPUT_CSV_FILE_PATH, NUMBER_OF_ROWS_TO_REMOVE, OUTPUT_CSV_FILE_PATH)
     print("Script finished.")
 
-# to run: python -m data_processing.row_remover
+# to run: 
+# python -m data_processing.row_remover

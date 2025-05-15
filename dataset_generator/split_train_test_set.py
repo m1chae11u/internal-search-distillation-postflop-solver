@@ -142,8 +142,8 @@ example usage:
 
 python -m dataset_generator.split_train_test_set \
     rows \
-    --input_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/first_22k_turn_river_search_tree_datasubset.json \
-    --test_rows 2000 \
-    --output_train_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/test_turn_river_sets/first_20k_turn_river_search_tree_datasubset_train.json \
-    --output_test_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/train_turn_river_sets/first_2k_test_turn_river_search_tree_datasubset_test.json
+    --input_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/next_32418_turn_river_search_tree_datasubset.json \
+    --test_rows 2418 \
+    --output_train_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/train_turn_river_sets/next_32418_turn_river_search_tree_datasubset_train.json \
+    --output_test_file /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/test_turn_river_sets/next_4418_turn_river_search_tree_datasubset_test.json
 '''

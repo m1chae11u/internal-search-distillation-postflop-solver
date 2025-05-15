@@ -66,7 +66,7 @@ def construct_search_tree_traces(input_file_path: str, output_file_path: str):
 
 if __name__ == "__main__":
     # Example usage (replace with actual paths)
-    input_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/first_22k_turn_river_search_tree_components.json"
-    output_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/first_22k_turn_river_search_tree_datasubset.json"
+    input_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/next_32418_turn_river_search_tree_components.json"
+    output_file_path = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/1.2_turn_river_split/next_32418_turn_river_search_tree_datasubset.json"
     construct_search_tree_traces(input_file_path, output_file_path)
 
