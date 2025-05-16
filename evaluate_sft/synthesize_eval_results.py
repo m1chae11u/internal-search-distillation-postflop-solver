@@ -221,6 +221,6 @@ if __name__ == "__main__":
     
     Example Usage:
     python -m evaluate_sft.synthesize_eval_results \
-        /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_peft_3.1-8b/test_accuracy_evals_20k_peft_3.1-8b.json \
-        /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_peft_3.1-8b/aggregated_test_accuracy_evals_20k_peft_3.1-8b.json
+        /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_peft_3.1-8b/test_accuracy_evals_50k_peft_3.1-8b.json \
+        /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_peft_3.1-8b/aggregated_test_accuracy_evals_50k_peft_3.1-8b.json
     '''

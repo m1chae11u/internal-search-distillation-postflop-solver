@@ -9,9 +9,9 @@ Example usage on 20k train data:
 
     python -m evaluate_sft.peft_run_on_test_set \
         --base_model_path /srv/share/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct \
-        --adapter_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_20k_peft_sft \
+        --adapter_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_50k_peft_sft \
         --test_set_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/test_turn_river_sets/4788_turn_river_search_tree_datasubset_test.json \
-        --output_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_peft_3.1-8b/test_predictions.json \
+        --output_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_peft_3.1-8b/test_predictions.json \
         --gpu_id 1 \
         --batch_size 100 \
         --max_new_tokens 512

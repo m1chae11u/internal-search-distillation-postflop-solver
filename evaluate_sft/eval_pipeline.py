@@ -344,8 +344,8 @@ def run_evaluation_on_file(input_filepath: str, output_filepath: str):
 if __name__ == '__main__':
     # ===== User Configuration =====
     # Please specify your input and output file paths here
-    input_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_full_3.2-3b/test_predictions.json"
-    output_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_full_3.2-3b/test_accuracy_evals_50k_full_3.2-3b.json"
+    input_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_peft_3.1-8b/test_predictions.json"
+    output_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_peft_3.1-8b/test_accuracy_evals_50k_peft_3.1-8b.json"
     # ============================
     print(f"Using input file: {input_json_filepath}")
     print(f"Using output file: {output_json_filepath}")

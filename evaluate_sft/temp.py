@@ -1,0 +1,5 @@
+print("<rangesummary> OOP_equity: 61.28%, OOP_ev: 15.05bb, IP_equity: 38.72%, IP_ev: 11.45bb </rangesummary>\n\n<oop>\nAction Check: Avg Frequency: 0.777, EV: 15.07bb\nAction Bet (33%): Avg Frequency: 0.221, EV: 19.17bb\nAction Bet (66%): Avg Frequency: 0.002, EV: 25.94bb\nAction Bet (125%): Avg Frequency: 0.000, EV: 21.49bb\nAction AllIn (328%): Avg Frequency: 0.000, EV: 9.13bb\n</oop>\n\n<oop action=\"check\">\n  <rangesummary> OOP_equity: 56.33%, OOP_ev: 13.36bb, IP_equity: 43.67%, IP_ev: 13.14bb </rangesummary>\n  <ip>\nAction Check: Avg Frequency: 0.640, EV: 6.73bb\nAction Bet (33%): Avg Frequency: 0.099, EV: 21.31bb\nAction Bet (66%): Avg Frequency: 0.135, EV: 29.89bb\nAction Bet (125%): Avg Frequency: 0.099, EV: 23.95bb\nAction AllIn (328%): Avg Frequency: 0.027, EV: 40.87bb\n  </ip>\n</oop>\n\n<ip_highest_freq_action>check</ip_highest_freq_action>")
+
+
+# to run:
+# python -m evaluate_sft.temp
