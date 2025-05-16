@@ -7,10 +7,10 @@ This script runs a FULL fine-tuned SFT model on a test set using vLLM.
 Example Usage:
 
     python -m evaluate_sft.full_sft_run_on_test_set \
-        --model_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_20k_full_sft \
+        --model_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_50k_full_sft \
         --test_set_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/test_turn_river_sets/4788_turn_river_search_tree_datasubset_test.json \
-        --output_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_full_3.2-3b/test_predictions.json \
-        --gpu_id 2 \
+        --output_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_full_3.2-3b/test_predictions.json \
+        --gpu_id 0 \
         --batch_size 100 \
         --max_tokens 512
 

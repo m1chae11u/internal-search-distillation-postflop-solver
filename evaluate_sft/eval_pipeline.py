@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 # Regex patterns
 ACTION_LINE_PATTERN = re.compile(
-    r"Action\s+(?P<name>[^:]+):\s+Avg\s+Frequency:\s+(?P<freq>[0-9.]+),\s+EV:\s+(?P<ev>[0-9.-]+)bb"
+    r"Action\s+(?P<name>[^:]+):\s+Avg\s+Frequency:\s+(?P<freq>[0-9]+\.?[0-9]*),\s+EV:\s+(?P<ev>[0-9.-]+)bb"
 )
 TAG_PATTERN = r"<{tag_name}(?:\s+action=\"(?P<action_attr>[^\"]*)\")?>(?P<content>.*?)</{tag_name}>"
 
@@ -344,8 +344,8 @@ def run_evaluation_on_file(input_filepath: str, output_filepath: str):
 if __name__ == '__main__':
     # ===== User Configuration =====
     # Please specify your input and output file paths here
-    input_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_peft_3.1-8b/test_predictions.json"
-    output_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/20k_peft_3.1-8b/test_accuracy_evals_20k_peft_3.1-8b.json"
+    input_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_full_3.2-3b/test_predictions.json"
+    output_json_filepath = "/home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/evaluate_sft/50k_full_3.2-3b/test_accuracy_evals_50k_full_3.2-3b.json"
     # ============================
     print(f"Using input file: {input_json_filepath}")
     print(f"Using output file: {output_json_filepath}")
