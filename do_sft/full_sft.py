@@ -18,9 +18,9 @@ Example Usage using local model (Llama-3.1-8B-Instruct):
 
 python -m do_sft.full_sft \
     --model_name meta-llama/Llama-3.2-3B-Instruct \
-    --traindata_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/train_turn_river_sets/first_20k_train_turn_river_search_tree_datasubset.json \
-    --output_dir /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_20k_full_sft \
-    --gpu_id 7
+    --traindata_path /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/datasets/train_turn_river_sets/50k_turn_river_search_tree_datasubset_train.json \
+    --output_dir /home/xuandong/mnt/poker/internal-search-distillation-postflop-solver/do_sft/sft_model_weights/turn_river_50k_full_sft \
+    --gpu_id 0
 """
 
 import os

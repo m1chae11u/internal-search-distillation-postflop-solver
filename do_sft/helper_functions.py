@@ -290,69 +290,73 @@ def process_batch_examples(model, examples, prompt_template, sampling_params, ba
 
 def find_local_model_path(model_name):
     """Find the path to a local model in the shared HuggingFace directory.
+    Can be a HuggingFace ID like 'org/model' or an absolute path.
     
     Args:
-        model_name (str): Model name in the format "org/model_name"
+        model_name (str): Model name in the format "org/model_name" or an absolute path.
         
     Returns:
         str or None: Path to the local model if found, None otherwise
     """
-    # For models in the format "meta-llama/Llama-3.1-8B-Instruct" 
-    if "meta-llama/llama-3.1" in model_name.lower() or "meta-llama/Llama-3.1" in model_name.lower():
-        # Handle the specific Llama 3.1 model
-        specific_path = "/srv/share/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct"
-        if os.path.exists(specific_path):
-            logger.info(f"Found Llama 3.1 model at predefined path: {specific_path}")
-            # Find the most recent snapshot
-            snapshot_dir = os.path.join(specific_path, 'snapshots')
-            if os.path.exists(snapshot_dir):
+    # 1. Check if model_name is already a direct, existing directory path
+    if os.path.isdir(model_name):
+        logger.info(f"Provided model_name '{model_name}' is an existing directory.")
+        snapshot_dir = os.path.join(model_name, 'snapshots')
+        if os.path.exists(snapshot_dir) and os.path.isdir(snapshot_dir):
+            snapshots = [d for d in os.listdir(snapshot_dir) if os.path.isdir(os.path.join(snapshot_dir, d))]
+            if snapshots:
+                # Sort by name (which typically includes timestamps or versioning)
+                snapshots.sort(reverse=True) 
+                latest_snapshot = os.path.join(snapshot_dir, snapshots[0])
+                logger.info(f"Using latest snapshot from provided path: {latest_snapshot}")
+                return latest_snapshot
+        logger.info(f"Using provided path directly (no snapshots found/preferred, or not in 'snapshots' subdir): {model_name}")
+        return model_name
+
+    # 2. If not a direct path, try to resolve it using HuggingFace naming conventions in the shared cache
+    shared_cache_base = "/srv/share/huggingface/hub"
+    
+    # Try specific hardcoded path for Llama-3.1-8B-Instruct if model_name matches the HF ID
+    # This can be useful if the standard naming convention below doesn't quite match for this specific popular model
+    if model_name == "meta-llama/Llama-3.1-8B-Instruct":
+        specific_hf_path = os.path.join(shared_cache_base, "models--meta-llama--Llama-3.1-8B-Instruct")
+        if os.path.isdir(specific_hf_path):
+            logger.info(f"Found '{model_name}' at specific path: {specific_hf_path}")
+            # Check for snapshots within this specific path
+            snapshot_dir = os.path.join(specific_hf_path, 'snapshots')
+            if os.path.exists(snapshot_dir) and os.path.isdir(snapshot_dir):
                 snapshots = [d for d in os.listdir(snapshot_dir) if os.path.isdir(os.path.join(snapshot_dir, d))]
                 if snapshots:
                     snapshots.sort(reverse=True)
                     latest_snapshot = os.path.join(snapshot_dir, snapshots[0])
-                    logger.info(f"Using latest snapshot: {latest_snapshot}")
+                    logger.info(f"Using latest snapshot for '{model_name}': {latest_snapshot}")
                     return latest_snapshot
-            return specific_path
+            logger.info(f"Using base directory for '{model_name}': {specific_hf_path}")
+            return specific_hf_path
     
-    # Convert model name to the directory format used by HuggingFace
+    # Generic name parsing for "org/model_id" or just "model_id"
+    prospective_path = None
     if "/" in model_name:
-        org, model_id = model_name.split("/", 1)
-        local_model_dir = f"/srv/share/huggingface/hub/models--{org}--{model_id}"
+        org, model_id_part = model_name.split("/", 1)
+        # Replace slashes in model_id_part with double dashes if that's part of the naming convention for directories
+        # e.g. if model_id_part itself contains slashes. Assuming it does not for typical HF IDs.
+        prospective_path = os.path.join(shared_cache_base, f"models--{org}--{model_id_part}")
     else:
-        local_model_dir = f"/srv/share/huggingface/hub/models--{model_name}"
+        # For models not under an organization, or perhaps local model names
+        prospective_path = os.path.join(shared_cache_base, f"models--{model_name}")
+
+    if prospective_path and os.path.isdir(prospective_path):
+        logger.info(f"Found model directory for '{model_name}' at: {prospective_path}")
+        snapshot_dir = os.path.join(prospective_path, 'snapshots')
+        if os.path.exists(snapshot_dir) and os.path.isdir(snapshot_dir):
+            snapshots = [d for d in os.listdir(snapshot_dir) if os.path.isdir(os.path.join(snapshot_dir, d))]
+            if snapshots:
+                snapshots.sort(reverse=True)
+                latest_snapshot = os.path.join(snapshot_dir, snapshots[0])
+                logger.info(f"Using latest snapshot: {latest_snapshot}")
+                return latest_snapshot
+        logger.info(f"Using model directory (no snapshots found/preferred): {prospective_path}")
+        return prospective_path
     
-    try:
-        # Check if directory exists and contains model files
-        has_model_files = False
-        snapshot_dir = os.path.join(local_model_dir, 'snapshots')
-        
-        if os.path.exists(local_model_dir) and os.path.exists(snapshot_dir):
-            # Check if any snapshots contain model files
-            for snapshot in os.listdir(snapshot_dir):
-                snapshot_path = os.path.join(snapshot_dir, snapshot)
-                if os.path.isdir(snapshot_path):
-                    if any(f.endswith('.safetensors') or f.endswith('.bin') for f in os.listdir(snapshot_path)):
-                        has_model_files = True
-                        break
-        
-        if os.path.exists(local_model_dir) and has_model_files:
-            logger.info(f"Found model locally at: {local_model_dir}")
-            
-            # Find the most recent snapshot
-            if os.path.exists(snapshot_dir):
-                snapshots = [d for d in os.listdir(snapshot_dir) if os.path.isdir(os.path.join(snapshot_dir, d))]
-                if snapshots:
-                    # Sort by name (which typically includes timestamps)
-                    snapshots.sort(reverse=True)
-                    latest_snapshot = os.path.join(snapshot_dir, snapshots[0])
-                    logger.info(f"Using latest snapshot: {latest_snapshot}")
-                    return latest_snapshot
-            
-            # If no snapshots found, use the model directory
-            return local_model_dir
-        else:
-            logger.warning(f"Model not found locally at: {local_model_dir}")
-            return None
-    except Exception as e:
-        logger.error(f"Error checking local model: {e}")
-        return None
+    logger.warning(f"Model '{model_name}' not found locally by direct path check or in shared cache ('{shared_cache_base}').")
+    return None
